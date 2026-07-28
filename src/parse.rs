@@ -115,6 +115,7 @@ impl<'t> Builder<'t> {
                     self.doc.images.push(Image {
                         url: link.url.clone(),
                         alt: alt.clone(),
+                        size: None,
                     });
                     let mut block = Block::new(BlockKind::Image(id), range);
                     block.spans = vec![Span::new(
@@ -432,6 +433,7 @@ impl<'t> Builder<'t> {
                 self.doc.images.push(Image {
                     url: target.url.clone(),
                     alt: alt.clone(),
+                    size: None,
                 });
                 let text = if alt.is_empty() {
                     target.url.clone()

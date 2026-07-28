@@ -186,6 +186,10 @@ pub struct Link {
 pub struct Image {
     pub url: String,
     pub alt: String,
+    /// Pixel dimensions, filled in after parsing by whoever can touch the disk.
+    /// Layout is pure, so it can only reserve rows for an image whose size is
+    /// already known.
+    pub size: Option<(u32, u32)>,
 }
 
 /// A parsed document: blocks plus the side tables their spans point into.

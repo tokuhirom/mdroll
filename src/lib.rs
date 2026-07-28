@@ -15,6 +15,7 @@ pub mod app;
 pub mod cli;
 pub mod clipboard;
 pub mod config;
+pub mod graphics;
 pub mod ir;
 pub mod layout;
 pub mod parse;

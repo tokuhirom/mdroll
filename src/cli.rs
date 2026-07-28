@@ -59,6 +59,10 @@ pub struct Cli {
     #[arg(long)]
     pub no_color: bool,
 
+    /// Never use DECDHL double-height headings, even where they are supported.
+    #[arg(short = 'z', long)]
+    pub no_big_headings: bool,
+
     /// Treat East Asian Ambiguous characters as two columns wide.
     #[arg(long)]
     pub ambiguous_wide: bool,

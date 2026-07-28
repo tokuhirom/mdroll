@@ -13,6 +13,7 @@
 //! Because the bottom row is written last at an absolute position, a content
 //! region that miscounts by a row cannot hide it.
 
+use crate::graphics::ImageStore;
 use crate::ir::{Color, Hit, HitTarget, Line, Link, Rect, Scale, Span, Style};
 use crate::screen::Screen;
 use crate::width::WidthCalc;
@@ -21,6 +22,7 @@ use anyhow::Result;
 use crossterm::style::{Attribute, SetAttribute, SetBackgroundColor, SetForegroundColor};
 use crossterm::terminal::{Clear, ClearType};
 use crossterm::{cursor::MoveTo, queue};
+use std::collections::HashSet;
 use std::io::Write;
 
 /// Turn autowrap off and on. Writing into the bottom-right cell with DECAWM
@@ -74,6 +76,11 @@ pub struct Frame<'a> {
     /// Contents of the bottom row.
     pub bottom: &'a [Span],
     pub decor: Decor<'a>,
+    /// Whether DECDHL line attributes may be written at all. Terminals that do
+    /// not implement them print `ESC # 3` as a parse error and then draw the
+    /// line twice, so the sequences are withheld entirely rather than sent
+    /// hopefully.
+    pub double_height: bool,
 }
 
 /// Where each visible link ended up on screen, for mouse hit testing.
@@ -110,13 +117,22 @@ impl Renderer {
         }
     }
 
-    pub fn draw<W: Write>(&self, out: &mut W, frame: &Frame<'_>) -> Result<Placement> {
+    pub fn draw<W: Write>(
+        &self,
+        out: &mut W,
+        frame: &Frame<'_>,
+        images: &mut ImageStore,
+    ) -> Result<Placement> {
         let view = frame.screen.viewport();
         let mut placement = Placement::default();
 
         queue!(out, SetAttribute(Attribute::Reset))?;
         queue!(out, Clear(ClearType::All))?;
+        // Last frame's images are gone with the clear on some terminals and
+        // not on others; deleting the placements explicitly makes it uniform.
+        images.clear_placements(out)?;
 
+        let mut placed: HashSet<usize> = HashSet::new();
         let mut y = 0u16;
         let mut idx = frame.scroll;
         while y < view.rows && idx < frame.lines.len() {
@@ -130,6 +146,7 @@ impl Renderer {
                 break;
             }
             self.draw_line(out, frame, idx, line, y, &mut placement)?;
+            self.place_images(out, frame, line, y, view.rows, images, &mut placed)?;
             y += rows;
             idx += 1;
         }
@@ -138,7 +155,9 @@ impl Renderer {
         // survives any miscount above.
         queue!(out, MoveTo(0, frame.screen.status_row()))?;
         out.write_all(DECAWM_OFF.as_bytes())?;
-        out.write_all(DECSWL.as_bytes())?;
+        if frame.double_height {
+            out.write_all(DECSWL.as_bytes())?;
+        }
         let bottom = slice_spans_columns(frame.bottom, 0, frame.screen.cols as usize, &self.calc);
         self.write_spans(out, &bottom, None)?;
         let used: usize = bottom.iter().map(|s| self.calc.str(&s.text)).sum();
@@ -153,6 +172,39 @@ impl Renderer {
         out.write_all(DECAWM_ON.as_bytes())?;
         out.flush()?;
         Ok(placement)
+    }
+
+    /// Put any image starting on, or continuing through, this row on screen.
+    ///
+    /// A hit's `rect.y` is the row's index within the image, so an image whose
+    /// top has already scrolled past is placed cropped rather than dropped.
+    fn place_images<W: Write>(
+        &self,
+        out: &mut W,
+        frame: &Frame<'_>,
+        line: &Line,
+        y: u16,
+        rows: u16,
+        images: &mut ImageStore,
+        placed: &mut HashSet<usize>,
+    ) -> Result<()> {
+        // Horizontal scrolling would need the image cropped on the left too;
+        // until then, no-wrap mode falls back to the reserved blank cells.
+        if frame.hoffset > 0 {
+            return Ok(());
+        }
+        for hit in &line.hits {
+            let HitTarget::Image(id) = hit.target else {
+                continue;
+            };
+            if !placed.insert(id.0) {
+                continue;
+            }
+            let visible = (hit.rect.h - hit.rect.y).min(rows.saturating_sub(y));
+            queue!(out, MoveTo(hit.rect.x, y))?;
+            images.place(out, id.0, hit.rect.w, hit.rect.h, hit.rect.y, visible)?;
+        }
+        Ok(())
     }
 
     fn draw_line<W: Write>(
@@ -180,10 +232,10 @@ impl Renderer {
                 break;
             }
             queue!(out, MoveTo(0, y + i as u16))?;
-            if double {
-                out.write_all(prefix.as_bytes())?;
-            } else {
-                out.write_all(DECSWL.as_bytes())?;
+            if frame.double_height {
+                // DECSWL undoes a previous DECDHL on this row; the terminal
+                // keeps line attributes across a clear.
+                out.write_all(if double { prefix } else { DECSWL }.as_bytes())?;
             }
             self.write_spans(out, &visible, Some(frame.links))?;
             queue!(out, SetAttribute(Attribute::Reset))?;
@@ -376,6 +428,30 @@ fn push_run(out: &mut Vec<Span>, span: &Span, text: String, highlighted: bool, s
     });
 }
 
+/// Whether the terminal implements DECDHL double-height lines.
+///
+/// This one cannot be probed cheaply and cannot be guessed from `TERM` alone:
+/// kitty advertises itself as a modern terminal and still renders `ESC # 3` as
+/// a parse error, which would print every heading twice. The list is therefore
+/// an allowlist of terminals known to implement it, and everything else falls
+/// back to colour and weight.
+pub fn detect_double_height() -> bool {
+    // tmux and screen rewrite line attributes and usually mangle them.
+    if std::env::var_os("TMUX").is_some() {
+        return false;
+    }
+    let term = std::env::var("TERM").unwrap_or_default();
+    if term.starts_with("screen") || term.contains("kitty") {
+        return false;
+    }
+    let program = std::env::var("TERM_PROGRAM").unwrap_or_default();
+    std::env::var_os("WEZTERM_PANE").is_some()
+        || std::env::var_os("WEZTERM_EXECUTABLE").is_some()
+        || program.eq_ignore_ascii_case("wezterm")
+        || term.starts_with("xterm")
+        || term.starts_with("foot")
+}
+
 pub fn detect_truecolor() -> bool {
     match std::env::var("COLORTERM") {
         Ok(v) => {
@@ -462,7 +538,9 @@ mod tests {
     fn frame_bytes(frame: &Frame<'_>) -> Vec<u8> {
         let renderer = Renderer::new(WidthCalc::default());
         let mut buf = Vec::new();
-        renderer.draw(&mut buf, frame).unwrap();
+        renderer
+            .draw(&mut buf, frame, &mut ImageStore::disabled())
+            .unwrap();
         buf
     }
 
@@ -475,6 +553,7 @@ mod tests {
             links: &[],
             bottom,
             decor: Decor::default(),
+            double_height: true,
         }
     }
 
@@ -574,7 +653,9 @@ mod tests {
         let frame = basic_frame(&lines, &[]);
         let renderer = Renderer::new(WidthCalc::default());
         let mut buf = Vec::new();
-        let placement = renderer.draw(&mut buf, &frame).unwrap();
+        let placement = renderer
+            .draw(&mut buf, &frame, &mut ImageStore::disabled())
+            .unwrap();
         let hit = placement.hits[0];
         assert_eq!((hit.rect.x, hit.rect.y), (6, 1));
     }
@@ -589,7 +670,9 @@ mod tests {
         let mut renderer = Renderer::new(WidthCalc::default());
         renderer.no_color = true;
         let mut buf = Vec::new();
-        renderer.draw(&mut buf, &basic_frame(&lines, &[])).unwrap();
+        renderer
+            .draw(&mut buf, &basic_frame(&lines, &[]), &mut ImageStore::disabled())
+            .unwrap();
         let text = String::from_utf8_lossy(&buf);
         assert!(!text.contains("\x1b[1m"));
     }

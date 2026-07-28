@@ -199,6 +199,42 @@ the mouse.
 
 ---
 
+## Terminal support
+
+WezTerm is the reference. Everything works everywhere; the features below are
+the ones that depend on what the terminal can actually do.
+
+| Feature | Works on | Elsewhere |
+| --- | --- | --- |
+| Inline images | WezTerm, kitty, ghostty | Alt text, dimmed |
+| Double-height headings | WezTerm, xterm, foot | Colour and weight only |
+| Clickable links (OSC 8) | Most modern terminals | Use `F` or `o` instead |
+| Clipboard over SSH (OSC 52) | Most modern terminals | Enable it in your terminal |
+| Truecolor | `COLORTERM=truecolor` | Nearest 256-color match |
+
+### Multiplexers
+
+`tmux` rewrites both graphics escapes and line attributes, so `mdroll` turns
+inline images and double-height headings off when `TMUX` is set rather than
+emitting sequences that would arrive mangled.
+
+[herdr](https://github.com/ogulcancelik/herdr) passes the Kitty graphics
+protocol through, but only when you opt in. Add this to your herdr config, or
+images will fall back to alt text:
+
+```toml
+[experimental]
+kitty_graphics = true
+```
+
+### Cell geometry
+
+Sizing an image in rows needs to know how many pixels a character cell is.
+`mdroll` asks the terminal, and falls back to 8×16 if it will not say — which
+distorts the aspect ratio slightly but never breaks the layout.
+
+---
+
 ## Design
 
 ### Pipeline
@@ -330,9 +366,14 @@ On terminals supporting DECDHL, `# Heading` is emitted as double-height text:
 ```
 
 This consumes two physical rows for one logical line, and halves the usable
-column count for that row, so the layout pass must account for both. WezTerm,
-xterm, kitty, and foot support this; Alacritty does not, and tmux frequently
-mangles it. Detection is by terminal capability, with `-z` to force it off.
+column count for that row, so the layout pass must account for both.
+
+Support is narrower than it looks. **kitty does not implement DECDHL** — it
+reports `ESC # 3` as a parse error and then draws the line a second time, so a
+heading appears twice. Because a terminal that ignores the sequence produces
+visibly broken output rather than a graceful no-op, detection is an allowlist
+rather than a denylist: WezTerm, xterm, and foot get double-height headings, and
+everything else gets colour and weight. `-z` forces them off anywhere.
 
 An alternative rasterized path (rendering heading text to a bitmap at an
 arbitrary point size and placing it with the Kitty graphics protocol) is planned
@@ -455,7 +496,7 @@ toggle_wrap = ["w"]
 ### v0.8 — Big headings
 
 - [x] DECDHL double-height headings
-- [ ] Capability detection and graceful fallback
+- [x] Capability detection and graceful fallback
 - [x] Layout accounting for halved column count and doubled row cost
 
 ### v0.9 — Mermaid
@@ -473,10 +514,11 @@ toggle_wrap = ["w"]
 
 ### v0.11 — Images and files
 
-- [ ] Inline images via the Kitty graphics protocol
-- [ ] Optional mouse capture (`--mouse`) with rectangle hit-testing
-- [ ] File browser when invoked with no arguments
-- [ ] `r` to reload, and `--watch` for live reload
+- [x] Inline images via the Kitty graphics protocol
+- [x] Optional mouse capture (`--mouse`) with rectangle hit-testing
+- [x] File browser when invoked with no arguments
+- [x] `r` to reload
+- [ ] `--watch` for live reload
 
 ### v1.0
 

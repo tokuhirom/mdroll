@@ -6,6 +6,7 @@
 
 use crate::clipboard;
 use crate::config::Settings;
+use crate::graphics::{self, CellSize, ImageStore, Protocol};
 use crate::ir::{Block, BlockKind, Document, HitTarget, Line, Span};
 use crate::layout::{self, Options, row_for_source_line};
 use crate::render::{Decor, Frame, Highlight, Overlay, Placement, Renderer};
@@ -76,6 +77,35 @@ pub struct App {
     pub toast: Option<(String, Instant)>,
     pub placement: Placement,
     pub quit: bool,
+
+    /// Graphics capability and cell geometry, detected once at startup.
+    pub graphics: Protocol,
+    pub cell: CellSize,
+    pub images: ImageStore,
+}
+
+/// What the terminal can do with pictures. Passed in rather than detected
+/// inside [`App`] so tests are not at the mercy of the environment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GraphicsInfo {
+    pub protocol: Protocol,
+    pub cell: CellSize,
+}
+
+impl GraphicsInfo {
+    pub fn detect() -> GraphicsInfo {
+        GraphicsInfo {
+            protocol: graphics::detect(),
+            cell: graphics::cell_size(),
+        }
+    }
+
+    pub fn disabled() -> GraphicsInfo {
+        GraphicsInfo {
+            protocol: Protocol::None,
+            cell: CellSize::default(),
+        }
+    }
 }
 
 impl App {
@@ -85,6 +115,7 @@ impl App {
         settings: Settings,
         theme: Theme,
         screen: Screen,
+        graphics: GraphicsInfo,
     ) -> App {
         let doc = crate::parse::parse(&source_text, &theme);
         let mut app = App {
@@ -115,14 +146,46 @@ impl App {
             toast: None,
             placement: Placement::default(),
             quit: false,
+            graphics: graphics.protocol,
+            cell: graphics.cell,
+            images: ImageStore::new(graphics.protocol, graphics.cell),
         };
         // Source view means "show me exactly what is in the file", which only
         // works if one logical line stays on one row.
         if app.source_view {
             app.wrap = false;
         }
+        app.measure_images();
         app.relayout();
         app
+    }
+
+    /// Resolve every image reference against the document's directory and read
+    /// its pixel size.
+    ///
+    /// Layout is pure and cannot touch the disk, so this has to happen first;
+    /// an image whose size stays `None` renders as its alt text.
+    pub fn measure_images(&mut self) {
+        let base = self
+            .path
+            .as_ref()
+            .and_then(|p| p.parent())
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        self.images.forget_all();
+        for (i, image) in self.doc.images.iter_mut().enumerate() {
+            image.size = None;
+            // No network fetching: a remote image stays as alt text.
+            if image.url.contains("://") {
+                continue;
+            }
+            let path = base.join(&image.url);
+            if let Some(size) = graphics::dimensions(&path) {
+                image.size = Some(size);
+                self.images.register(i, path);
+            }
+        }
     }
 
     pub fn calc(&self) -> WidthCalc {
@@ -136,6 +199,8 @@ impl App {
             max_width: self.settings.width,
             calc: self.calc(),
             double_height: self.double_height,
+            images: self.settings.images && self.graphics.available(),
+            cell: self.cell,
         }
     }
 
@@ -290,6 +355,7 @@ impl App {
 
     fn reparse(&mut self) {
         self.doc = crate::parse::parse(&self.source_text, &self.theme);
+        self.measure_images();
         self.help_doc = None;
         if self.help {
             self.help_doc = Some(crate::parse::parse(HELP, &self.theme));
@@ -466,10 +532,15 @@ impl App {
             .collect()
     }
 
-    pub fn link_under_cursor(&self) -> Option<String> {
+    /// What `o` acts on: the first link in the block under the cursor, or the
+    /// image if the block is one.
+    pub fn target_under_cursor(&self) -> Option<String> {
         let idx = self.cursor?;
         let doc = self.active_doc();
         let block = doc.blocks.get(idx)?;
+        if let BlockKind::Image(id) = block.kind {
+            return doc.images.get(id.0).map(|i| i.url.clone());
+        }
         let id = block.spans.iter().find_map(|s| s.link)?;
         doc.links.get(id.0).map(|l| l.url.clone())
     }
@@ -484,10 +555,17 @@ impl App {
                     self.toast(&format!("cannot open: {err}"));
                 }
             }
-            _ => match open_external(url) {
-                Ok(()) => self.toast(&format!("opened {url}")),
-                Err(err) => self.toast(&format!("cannot open: {err}")),
-            },
+            // A local file that is not Markdown — an image, a PDF — goes to the
+            // system handler by its resolved path, not the relative link text.
+            Some(path) => self.hand_off(&path.display().to_string()),
+            None => self.hand_off(url),
+        }
+    }
+
+    fn hand_off(&mut self, target: &str) {
+        match open_external(target) {
+            Ok(()) => self.toast(&format!("opened {target}")),
+            Err(err) => self.toast(&format!("cannot open: {err}")),
         }
     }
 
@@ -647,13 +725,20 @@ impl App {
         } else {
             Vec::new()
         };
+        // Field-by-field borrows: the image store is taken mutably while the
+        // rest of the state is read, so no method call on `self` may be live.
+        let doc = match (self.help, &self.help_doc) {
+            (true, Some(doc)) => doc,
+            _ => &self.doc,
+        };
         let frame = Frame {
             screen: self.screen,
             lines: &self.lines,
             scroll: self.scroll,
             hoffset: self.hoffset,
-            links: &self.active_doc().links,
+            links: &doc.links,
             bottom: &bottom,
+            double_height: self.double_height,
             decor: Decor {
                 cursor_block: self.cursor,
                 selection: self.selection,
@@ -662,7 +747,8 @@ impl App {
                 overlays: &overlays,
             },
         };
-        self.placement = renderer.draw(out, &frame)?;
+        let placement = renderer.draw(out, &frame, &mut self.images)?;
+        self.placement = placement;
         Ok(())
     }
 
@@ -810,7 +896,7 @@ impl App {
             }
 
             KeyCode::Char('F') => self.start_link_pick(),
-            KeyCode::Char('o') | KeyCode::Enter => match self.link_under_cursor() {
+            KeyCode::Char('o') | KeyCode::Enter => match self.target_under_cursor() {
                 Some(url) => self.open(&url),
                 None => self.toast("no link under the cursor"),
             },
@@ -955,6 +1041,7 @@ mod tests {
             Settings::default(),
             Theme::default(),
             Screen::new(40, 10),
+            GraphicsInfo::disabled(),
         )
     }
 
@@ -1169,6 +1256,23 @@ mod tests {
         assert_eq!(a.mode, Mode::Normal);
         assert!(a.matches.is_empty());
         assert_eq!(a.scroll, before);
+    }
+
+    #[test]
+    fn o_on_an_image_block_targets_the_image() {
+        let mut a = app("![shot](shot.png)\n");
+        a.cursor = Some(0);
+        assert_eq!(a.target_under_cursor().as_deref(), Some("shot.png"));
+    }
+
+    #[test]
+    fn o_on_a_paragraph_targets_its_first_link() {
+        let mut a = app("see [docs](https://example.com) and [more](https://other.example)\n");
+        a.cursor = Some(0);
+        assert_eq!(
+            a.target_under_cursor().as_deref(),
+            Some("https://example.com")
+        );
     }
 
     #[test]

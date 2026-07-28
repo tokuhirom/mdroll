@@ -7,11 +7,11 @@ use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use crossterm::{cursor, execute};
-use mdroll::app::{App, browser_markdown};
+use mdroll::app::{App, GraphicsInfo, browser_markdown};
 use mdroll::cli::Cli;
 use mdroll::config::{ConfigFile, Settings, default_config_path, env_var};
 use mdroll::ir::HitTarget;
-use mdroll::render::Renderer;
+use mdroll::render::{Renderer, detect_double_height};
 use mdroll::screen::Screen;
 use mdroll::theme;
 use std::io::{IsTerminal, Read, Write};
@@ -32,13 +32,21 @@ fn main() -> Result<()> {
     let theme = theme::load(&settings.theme)?;
     let (text, path) = read_input(&cli)?;
 
-    let mut app = App::new(text, path, settings, theme, current_screen()?);
+    let graphics = if settings.images {
+        GraphicsInfo::detect()
+    } else {
+        GraphicsInfo::disabled()
+    };
+    let mut app = App::new(text, path, settings, theme, current_screen()?, graphics);
     run(&mut app)
 }
 
 /// Command line → environment → config file → built-in default.
 fn resolve(cli: &Cli) -> Result<Settings> {
     let mut settings = Settings::default();
+    // Capability detection sets the default; the config file and the command
+    // line can still override it in either direction.
+    settings.double_height = detect_double_height();
 
     let config_path = cli
         .config
@@ -82,6 +90,9 @@ fn resolve(cli: &Cli) -> Result<Settings> {
     }
     if cli.no_color {
         settings.no_color = true;
+    }
+    if cli.no_big_headings {
+        settings.double_height = false;
     }
     if cli.ambiguous_wide {
         settings.ambiguous_wide = true;
@@ -162,13 +173,17 @@ fn run(app: &mut App) -> Result<()> {
             Event::Resize(cols, rows) => app.resize(Screen::new(cols, rows)),
             Event::Mouse(mouse) => match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) => {
-                    if let Some(HitTarget::Link(id)) =
-                        app.placement.target_at(mouse.column, mouse.row)
-                    {
-                        let url = app.doc.links.get(id.0).map(|l| l.url.clone());
-                        if let Some(url) = url {
-                            app.open(&url);
+                    let url = match app.placement.target_at(mouse.column, mouse.row) {
+                        Some(HitTarget::Link(id)) => {
+                            app.doc.links.get(id.0).map(|l| l.url.clone())
                         }
+                        Some(HitTarget::Image(id)) => {
+                            app.doc.images.get(id.0).map(|i| i.url.clone())
+                        }
+                        None => None,
+                    };
+                    if let Some(url) = url {
+                        app.open(&url);
                     }
                 }
                 MouseEventKind::ScrollDown => app.scroll_by(3),

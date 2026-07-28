@@ -5,6 +5,7 @@
 //! handled by discarding the result and calling it again. There is no
 //! incremental state and therefore nothing to invalidate.
 
+use crate::graphics::{self, CellSize};
 use crate::ir::*;
 use crate::screen::Viewport;
 use crate::theme::Theme;
@@ -23,6 +24,11 @@ pub struct Options {
     pub calc: WidthCalc,
     /// Emit headings as DECDHL double-height lines.
     pub double_height: bool,
+    /// Reserve rows for inline images. When false, or when the terminal has no
+    /// graphics support, image blocks render as their alt text.
+    pub images: bool,
+    /// Pixels per character cell, used to turn an image's pixel size into rows.
+    pub cell: CellSize,
 }
 
 impl Default for Options {
@@ -33,6 +39,8 @@ impl Default for Options {
             max_width: 0,
             calc: WidthCalc::default(),
             double_height: false,
+            images: false,
+            cell: CellSize::default(),
         }
     }
 }
@@ -42,6 +50,7 @@ pub fn layout(doc: &Document, view: Viewport, opts: &Options, theme: &Theme) -> 
         doc,
         theme,
         opts,
+        view,
         total: total_width(view, opts),
         lines: Vec::new(),
     };
@@ -72,6 +81,7 @@ struct Ctx<'a> {
     doc: &'a Document,
     theme: &'a Theme,
     opts: &'a Options,
+    view: Viewport,
     total: usize,
     lines: Vec<Line>,
 }
@@ -103,6 +113,10 @@ impl<'a> Ctx<'a> {
             BlockKind::Rule => self.rule(idx, block),
             BlockKind::Code { .. } => self.code(idx, block),
             BlockKind::Table => self.table(idx, block),
+            BlockKind::Image(id) => {
+                let id = *id;
+                self.image(idx, block, id);
+            }
             BlockKind::Heading(level) => {
                 let level = *level;
                 self.flow(idx, block, self.heading_scale(level));
@@ -201,6 +215,63 @@ impl<'a> Ctx<'a> {
         let start = block.source_range.start;
         let last = block.source_range.end.saturating_sub(1).max(start);
         (start + row).min(last)
+    }
+
+    /// Reserve cells for an inline image and hang a hit rectangle off every
+    /// row it covers.
+    ///
+    /// The hit carries the row's index *within* the image, which is what lets
+    /// the renderer place a partially scrolled image cropped rather than
+    /// dropping it.
+    fn image(&mut self, idx: usize, block: &Block, id: ImageId) {
+        let size = self
+            .doc
+            .images
+            .get(id.0)
+            .and_then(|i| i.size)
+            .filter(|_| self.opts.images);
+        let Some(size) = size else {
+            // No graphics, or a remote or unreadable file: show the alt text.
+            return self.flow(idx, block, Scale::Normal);
+        };
+
+        let width = self.content_width(block, Scale::Normal);
+        // An image never takes more than two thirds of the screen, so there is
+        // always some text left to orient by.
+        let max_rows = ((self.view.rows as usize * 2) / 3).max(3);
+        let (cols, rows) = graphics::fit(size, self.opts.cell, width, max_rows);
+        let x = self.width_of(&self.lead_spans(block, false)) as u16;
+        let source = block.source_range.start;
+
+        for row in 0..rows {
+            let mut spans = self.lead_spans(block, row == 0);
+            // Reserved cells: the terminal paints the image over them.
+            spans.push(Span::plain(" ".repeat(cols as usize)));
+            let mut line = Line::new(source, idx, spans);
+            line.hits = vec![Hit {
+                rect: Rect {
+                    x,
+                    y: row,
+                    w: cols,
+                    h: rows,
+                },
+                target: HitTarget::Image(id),
+            }];
+            self.push(line);
+        }
+
+        let alt = self
+            .doc
+            .images
+            .get(id.0)
+            .map(|i| i.alt.clone())
+            .unwrap_or_default();
+        if !alt.trim().is_empty() {
+            let mut spans = self.lead_spans(block, false);
+            let (text, _) = self.calc().truncate(&alt, width);
+            spans.push(Span::new(text, self.theme.dim));
+            self.push(Line::new(source, idx, spans));
+        }
     }
 
     fn rule(&mut self, idx: usize, block: &Block) {
@@ -744,6 +815,80 @@ mod tests {
                 );
             }
         }
+    }
+
+    fn image_doc(size: Option<(u32, u32)>) -> (Document, Theme) {
+        let theme = Theme::default();
+        let mut doc = parse("![a picture](pic.png)\n", &theme);
+        doc.images[0].size = size;
+        (doc, theme)
+    }
+
+    #[test]
+    fn an_image_reserves_rows_and_tags_every_one_of_them() {
+        let (doc, theme) = image_doc(Some((400, 200)));
+        let opts = Options {
+            images: true,
+            cell: CellSize { w: 10, h: 20 },
+            ..Options::default()
+        };
+        let lines = layout(&doc, Viewport::new(80, 24), &opts, &theme);
+        // 400x200px over 10x20px cells is 40x10 cells, within both budgets.
+        let tagged: Vec<&Line> = lines.iter().filter(|l| !l.hits.is_empty()).collect();
+        assert_eq!(tagged.len(), 10);
+        for (i, line) in tagged.iter().enumerate() {
+            let hit = line.hits[0];
+            assert_eq!(hit.target, HitTarget::Image(ImageId(0)));
+            assert_eq!(hit.rect.y, i as u16, "each row knows its place in the image");
+            assert_eq!(hit.rect.h, 10);
+            assert_eq!(hit.rect.w, 40);
+        }
+    }
+
+    #[test]
+    fn an_image_is_followed_by_its_alt_text_as_a_caption() {
+        let (doc, theme) = image_doc(Some((400, 200)));
+        let opts = Options {
+            images: true,
+            cell: CellSize { w: 10, h: 20 },
+            ..Options::default()
+        };
+        let lines = layout(&doc, Viewport::new(80, 24), &opts, &theme);
+        assert!(lines.last().unwrap().text().contains("a picture"));
+    }
+
+    #[test]
+    fn an_image_is_capped_so_text_stays_on_screen() {
+        let (doc, theme) = image_doc(Some((400, 4000)));
+        let opts = Options {
+            images: true,
+            cell: CellSize { w: 10, h: 20 },
+            ..Options::default()
+        };
+        let lines = layout(&doc, Viewport::new(80, 24), &opts, &theme);
+        let rows = lines.iter().filter(|l| !l.hits.is_empty()).count();
+        assert!(rows <= 16, "a tall image took {rows} of 24 rows");
+    }
+
+    #[test]
+    fn an_unmeasurable_image_falls_back_to_alt_text() {
+        let (doc, theme) = image_doc(None);
+        let opts = Options {
+            images: true,
+            ..Options::default()
+        };
+        let lines = layout(&doc, Viewport::new(80, 24), &opts, &theme);
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].hits.is_empty());
+        assert_eq!(lines[0].text(), "a picture");
+    }
+
+    #[test]
+    fn turning_images_off_falls_back_to_alt_text() {
+        let (doc, theme) = image_doc(Some((400, 200)));
+        let lines = layout(&doc, Viewport::new(80, 24), &Options::default(), &theme);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text(), "a picture");
     }
 
     #[test]
