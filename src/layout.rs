@@ -225,6 +225,14 @@ impl<'a> Ctx<'a> {
     /// the renderer place a partially scrolled image cropped rather than
     /// dropping it.
     fn image(&mut self, idx: usize, block: &Block, id: ImageId) {
+        if !self.image_rows(idx, block, id, true) {
+            // No graphics, or a remote or unreadable file: show the alt text.
+            self.flow(idx, block, Scale::Normal);
+        }
+    }
+
+    /// Lay out an image, returning false if it cannot be drawn at all.
+    fn image_rows(&mut self, idx: usize, block: &Block, id: ImageId, caption: bool) -> bool {
         let size = self
             .doc
             .images
@@ -232,8 +240,7 @@ impl<'a> Ctx<'a> {
             .and_then(|i| i.size)
             .filter(|_| self.opts.images);
         let Some(size) = size else {
-            // No graphics, or a remote or unreadable file: show the alt text.
-            return self.flow(idx, block, Scale::Normal);
+            return false;
         };
 
         let width = self.content_width(block, Scale::Normal);
@@ -267,12 +274,13 @@ impl<'a> Ctx<'a> {
             .get(id.0)
             .map(|i| i.alt.clone())
             .unwrap_or_default();
-        if !alt.trim().is_empty() {
+        if caption && !alt.trim().is_empty() {
             let mut spans = self.lead_spans(block, false);
             let (text, _) = self.calc().truncate(&alt, width);
             spans.push(Span::new(text, self.theme.dim));
             self.push(Line::new(source, idx, spans));
         }
+        true
     }
 
     fn rule(&mut self, idx: usize, block: &Block) {
@@ -330,6 +338,13 @@ impl<'a> Ctx<'a> {
     }
 
     fn code(&mut self, idx: usize, block: &Block) {
+        // A mermaid block rendered through mmdc displays as its picture but
+        // stays a code block, so `yc` still yanks the diagram source.
+        if let Some(id) = block.image
+            && self.image_rows(idx, block, id, false)
+        {
+            return;
+        }
         if self.mermaid(idx, block) {
             return;
         }

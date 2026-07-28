@@ -22,6 +22,7 @@ pub mod ir;
 pub mod keys;
 pub mod layout;
 pub mod mermaid;
+pub mod mmdc;
 pub mod parse;
 pub mod render;
 pub mod screen;

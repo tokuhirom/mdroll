@@ -6,7 +6,10 @@ diagrams, and inline images, all in the terminal you already have.
 
 ![A generated gradient, 320×180](example.png)
 
-## Pipeline
+## パイプライン
+
+見出しはビットマップとして描画されるので、日本語でも同じように大きくなります。
+本文の折り返しは UAX #14 に従い、禁則処理によって句読点が行頭に来ません。
 
 ```mermaid
 flowchart LR
@@ -19,7 +22,6 @@ flowchart LR
 | --- | :---: | --- |
 | Tables | | Column widths in display columns, so 日本語 lines up |
 | Images | `i` | Kitty graphics, cropped as they scroll |
-| Source view | `s` | One logical line per row, for copying |
 | Contents | `T` | Every heading, as links |
 
 - [x] UAX #14 line breaking with kinsoku
@@ -29,10 +31,3 @@ flowchart LR
 > [!NOTE]
 > The headings above are bitmaps: kitty has graphics but no DECDHL, so they
 > are rasterized. On WezTerm the same headings use DECDHL instead.
-
-```rust
-fn layout(doc: &Document, view: Viewport, opts: &Options) -> Vec<Line> {
-    // A pure function: toggling a mode just calls it again.
-    doc.blocks.iter().flat_map(|b| b.render(view, opts)).collect()
-}
-```

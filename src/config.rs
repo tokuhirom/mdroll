@@ -26,8 +26,34 @@ pub struct ConfigFile {
     pub mouse: Option<bool>,
     pub east_asian_ambiguous_wide: Option<bool>,
     pub watch: Option<bool>,
+    pub mermaid: Option<String>,
     #[serde(default)]
     pub keys: BTreeMap<String, Vec<String>>,
+}
+
+/// How mermaid blocks are drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MermaidMode {
+    /// Box drawings where they work, `mmdc` for everything else. The default:
+    /// box drawings are instant and are selectable text, so they win when they
+    /// can render the diagram at all.
+    #[default]
+    Auto,
+    /// Never launch `mmdc`.
+    Text,
+    /// Always render through `mmdc`, where it and terminal graphics exist.
+    Image,
+}
+
+impl MermaidMode {
+    pub fn parse(s: &str) -> Option<MermaidMode> {
+        match s.to_ascii_lowercase().as_str() {
+            "auto" => Some(MermaidMode::Auto),
+            "text" | "boxes" => Some(MermaidMode::Text),
+            "image" | "images" => Some(MermaidMode::Image),
+            _ => None,
+        }
+    }
 }
 
 impl ConfigFile {
@@ -56,6 +82,7 @@ pub struct Settings {
     pub ambiguous_wide: bool,
     pub no_color: bool,
     pub watch: bool,
+    pub mermaid: MermaidMode,
     pub keys: BTreeMap<String, Vec<String>>,
 }
 
@@ -73,6 +100,7 @@ impl Default for Settings {
             ambiguous_wide: false,
             no_color: false,
             watch: false,
+            mermaid: MermaidMode::default(),
             keys: BTreeMap::new(),
         }
     }
@@ -114,6 +142,9 @@ impl Settings {
         }
         if let Some(v) = file.watch {
             self.watch = v;
+        }
+        if let Some(v) = file.mermaid.as_deref().and_then(MermaidMode::parse) {
+            self.mermaid = v;
         }
         if !file.keys.is_empty() {
             self.keys = file.keys.clone();
@@ -194,6 +225,22 @@ mod tests {
     #[test]
     fn unknown_config_keys_are_an_error_rather_than_a_silent_typo() {
         assert!(toml::from_str::<ConfigFile>("thmee = \"dracula\"").is_err());
+    }
+
+    #[test]
+    fn the_mermaid_mode_is_read_from_the_config() {
+        let file: ConfigFile = toml::from_str(r#"mermaid = "image""#).unwrap();
+        let mut settings = Settings::default();
+        settings.apply_file(&file);
+        assert_eq!(settings.mermaid, MermaidMode::Image);
+    }
+
+    #[test]
+    fn an_unrecognised_mermaid_mode_leaves_the_default_alone() {
+        let file: ConfigFile = toml::from_str(r#"mermaid = "sideways""#).unwrap();
+        let mut settings = Settings::default();
+        settings.apply_file(&file);
+        assert_eq!(settings.mermaid, MermaidMode::Auto);
     }
 
     #[test]

@@ -15,8 +15,9 @@ read by unrolling sideways.
 ![mdroll rendering a document with an inline image, a mermaid flowchart, a table, and an alert](doc/screenshot.png)
 
 <sub>Rendering `doc/demo.md` with the Dracula theme, captured in kitty. The
-headings there are bitmaps rather than DECDHL, because kitty has graphics but
-no double-height lines — see [Terminal support](#terminal-support).</sub>
+headings — including the Japanese one — are bitmaps rather than DECDHL,
+because kitty has graphics but no double-height lines. See
+[Terminal support](#terminal-support).</sub>
 
 ---
 
@@ -44,7 +45,8 @@ gracefully rather than being the design center.
 - **Full GitHub Flavored Markdown** — tables, task lists, strikethrough,
   autolinks, footnotes, and `> [!NOTE]` alerts.
 - **Mermaid diagrams** — `flowchart` and `sequenceDiagram` drawn with box
-  characters, laid out by rank. Anything unsupported falls back to source.
+  characters, laid out by rank. Anything else goes through `mmdc` and renders
+  as a picture, if you have it installed.
 - **Two rendering modes** — rendered view, and raw source view showing `#`,
   `**`, and friends as written.
 - **Two layout modes** — reflow to terminal width, or no-wrap with horizontal
@@ -124,6 +126,7 @@ on a terminal.
 | `--mouse` | Enable mouse capture (needed for image click actions). Off by default. |
 | `--no-images` | Disable inline image rendering. |
 | `--no-color` | Plain output, no ANSI styling. |
+| `--mermaid <MODE>` | `auto`, `text`, or `image`. Default `auto`. |
 | `--watch` | Reload automatically when the file changes on disk. |
 | `-z`, `--no-big-headings` | Never draw headings at double size, by either method. |
 | `--ambiguous-wide` | Treat East Asian Ambiguous characters as two columns. |
@@ -248,6 +251,27 @@ images will fall back to alt text:
 [experimental]
 kitty_graphics = true
 ```
+
+### Mermaid
+
+Box drawings handle `flowchart` and `sequenceDiagram`. Everything else — pie
+charts, Gantt charts, state diagrams, subgraphs, anything cyclic — needs a real
+renderer, which means [mermaid-cli](https://github.com/mermaid-js/mermaid-cli):
+
+```console
+$ mise use -g npm:@mermaid-js/mermaid-cli
+$ npx puppeteer browsers install chrome-headless-shell
+```
+
+With `mmdc` on `PATH` and a terminal that has graphics, those diagrams render as
+pictures. Without it they show as source. `--mermaid image` forces the picture
+path even for diagrams box drawings could handle; `--mermaid text` never runs
+`mmdc` at all.
+
+Rendering happens on a worker thread, because starting a browser takes long
+enough to feel, and results are cached under `~/.cache/mdroll/mermaid` keyed by
+the diagram's content. The box drawings or the source appear immediately and the
+picture replaces them when it arrives.
 
 ### Cell geometry
 
@@ -461,6 +485,7 @@ images = true
 mouse = false
 east_asian_ambiguous_wide = true
 watch = false
+mermaid = "auto"                # "auto" | "text" | "image"
 
 [keys]
 # Naming an action replaces all of its default bindings. An empty list
@@ -545,8 +570,8 @@ Key specs are a single character, a name such as `Esc`, `Space`, `Tab`,
 
 - [x] `flowchart` / `graph` rendered with box drawings, laid out by rank
 - [x] `sequenceDiagram` rendered with lifelines and arrows
-- [x] Fall back to a highlighted code block for unsupported diagram types
-- [ ] Image rendering through `mmdc` where the terminal has graphics
+- [x] Image rendering through `mmdc` where the terminal has graphics
+- [x] Fall back to a highlighted code block when neither can draw it
 
 ### v0.10 — Finding things
 

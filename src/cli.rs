@@ -63,6 +63,10 @@ pub struct Cli {
     #[arg(long)]
     pub no_color: bool,
 
+    /// How to draw mermaid blocks: auto, text, or image.
+    #[arg(long, value_name = "MODE")]
+    pub mermaid: Option<String>,
+
     /// Reload automatically when the file changes on disk.
     #[arg(long)]
     pub watch: bool,

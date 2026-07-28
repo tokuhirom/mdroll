@@ -9,7 +9,7 @@ use crossterm::terminal::{
 use crossterm::{cursor, execute};
 use mdroll::app::{App, GraphicsInfo, browser_markdown};
 use mdroll::cli::Cli;
-use mdroll::config::{ConfigFile, Settings, default_config_path, env_var};
+use mdroll::config::{ConfigFile, MermaidMode, Settings, default_config_path, env_var};
 use mdroll::graphics::Protocol;
 use mdroll::ir::HitTarget;
 use mdroll::render::{Renderer, detect_double_height};
@@ -164,6 +164,10 @@ fn resolve(cli: &Cli) -> Result<Settings> {
     if cli.watch {
         settings.watch = true;
     }
+    if let Some(mode) = &cli.mermaid {
+        settings.mermaid =
+            MermaidMode::parse(mode).with_context(|| format!("unknown --mermaid mode {mode:?}"))?;
+    }
     if cli.no_big_headings {
         settings.double_height = false;
     }
@@ -245,6 +249,9 @@ fn run(app: &mut App) -> Result<()> {
             // Polling rather than an inotify dependency: a viewer that wakes up
             // five times a second costs nothing, and this works identically on
             // every platform and over network filesystems.
+            if app.poll_diagrams() {
+                redraw = true;
+            }
             if app.settings.watch {
                 let now = app.mtime();
                 if now != seen_mtime {

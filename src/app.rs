@@ -5,9 +5,9 @@
 //! event loop in `main` touch the real terminal.
 
 use crate::clipboard;
-use crate::config::Settings;
+use crate::config::{MermaidMode, Settings};
 use crate::graphics::{self, CellSize, ImageStore, Protocol};
-use crate::ir::{Block, BlockKind, Document, HitTarget, Line, Span};
+use crate::ir::{Block, BlockKind, Document, HitTarget, Image, ImageId, Line, Span};
 use crate::keys::{Action, Keymap};
 use crate::layout::{self, Options, row_for_source_line};
 use crate::render::{Decor, Frame, Highlight, Overlay, Placement, Renderer};
@@ -18,6 +18,7 @@ use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{Receiver, channel};
 use std::time::{Duration, Instant};
 
 pub const TOAST_DURATION: Duration = Duration::from_millis(1500);
@@ -90,6 +91,20 @@ pub struct App {
     pub cell: CellSize,
     pub raster_headings: bool,
     pub images: ImageStore,
+
+    /// Diagrams being rendered by `mmdc` on a worker thread.
+    diagrams: Option<Receiver<Diagram>>,
+    /// Bumped on every reparse, so results for a document that has since been
+    /// replaced are recognised as stale and dropped.
+    generation: u64,
+}
+
+/// A finished `mmdc` render, on its way back to the UI thread.
+struct Diagram {
+    generation: u64,
+    block: usize,
+    path: PathBuf,
+    size: (u32, u32),
 }
 
 /// What the terminal can do with pictures. Passed in rather than detected
@@ -166,6 +181,8 @@ impl App {
             graphics: graphics.protocol,
             cell: graphics.cell,
             raster_headings: graphics.raster_headings,
+            diagrams: None,
+            generation: 0,
             images: {
                 let mut store = ImageStore::new(graphics.protocol, graphics.cell);
                 if graphics.raster_headings {
@@ -186,7 +203,118 @@ impl App {
         }
         app.measure_images();
         app.relayout();
+        app.prepare_diagrams();
         app
+    }
+
+    /// Whether the theme's background is dark, which decides which mermaid
+    /// palette `mmdc` should use. Unknown means the `terminal` theme, and
+    /// terminals are dark far more often than not.
+    fn theme_is_dark(&self) -> bool {
+        match self.theme.background {
+            Some(crate::ir::Color::Rgb { r, g, b }) => {
+                // Rec. 601 luma, which is close enough for a binary choice.
+                (r as u32 * 299 + g as u32 * 587 + b as u32 * 114) / 1000 < 128
+            }
+            _ => true,
+        }
+    }
+
+    /// Hand any mermaid block that needs `mmdc` to a worker thread.
+    ///
+    /// Launching a browser takes long enough to be felt, so it never happens on
+    /// the UI thread; the box-drawing render or the source shows immediately
+    /// and the picture replaces it when it arrives.
+    pub fn prepare_diagrams(&mut self) {
+        self.diagrams = None;
+        self.generation = self.generation.wrapping_add(1);
+        if self.settings.mermaid == MermaidMode::Text
+            || !self.settings.images
+            || !self.graphics.available()
+            || !crate::mmdc::available()
+        {
+            return;
+        }
+
+        let width = self.screen.viewport().cols as usize;
+        let calc = self.calc();
+        let jobs: Vec<(usize, String)> = self
+            .doc
+            .blocks
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| {
+                matches!(&b.kind, BlockKind::Code { lang: Some(lang) }
+                    if lang.eq_ignore_ascii_case("mermaid"))
+            })
+            .filter(|(_, b)| match self.settings.mermaid {
+                MermaidMode::Image => true,
+                // Box drawings win when they can render the diagram and it
+                // fits; they are instant and they are selectable text.
+                _ => match crate::mermaid::render(&b.text(), &calc) {
+                    Some(rows) => rows.iter().any(|r| calc.str(r) > width),
+                    None => true,
+                },
+            })
+            .map(|(i, b)| (i, b.text()))
+            .collect();
+        if jobs.is_empty() {
+            return;
+        }
+
+        let (tx, rx) = channel();
+        let generation = self.generation;
+        let dark = self.theme_is_dark();
+        std::thread::spawn(move || {
+            for (block, code) in jobs {
+                let Ok(path) = crate::mmdc::render(&code, dark) else {
+                    continue;
+                };
+                let Some(size) = graphics::dimensions(&path) else {
+                    continue;
+                };
+                // A closed channel means the document moved on; stop working.
+                if tx
+                    .send(Diagram {
+                        generation,
+                        block,
+                        path,
+                        size,
+                    })
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        });
+        self.diagrams = Some(rx);
+    }
+
+    /// Take delivery of any finished diagrams. Returns whether anything landed.
+    pub fn poll_diagrams(&mut self) -> bool {
+        let Some(rx) = &self.diagrams else {
+            return false;
+        };
+        let arrived: Vec<Diagram> = rx.try_iter().collect();
+        let mut changed = false;
+        for diagram in arrived {
+            if diagram.generation != self.generation || diagram.block >= self.doc.blocks.len() {
+                continue;
+            }
+            let id = ImageId(self.doc.images.len());
+            self.doc.images.push(Image {
+                url: diagram.path.display().to_string(),
+                alt: String::new(),
+                size: Some(diagram.size),
+            });
+            self.images.register(id.0, diagram.path);
+            self.doc.blocks[diagram.block].image = Some(id);
+            changed = true;
+        }
+        if changed {
+            self.relayout();
+        }
+        changed
     }
 
     /// Resolve every image reference against the document's directory and read
@@ -403,6 +531,7 @@ impl App {
         self.help_doc = None;
         self.toc_doc = None;
         self.toc = false;
+        self.prepare_diagrams();
         if self.help {
             self.help_doc = Some(crate::parse::parse(HELP, &self.theme));
         }

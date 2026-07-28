@@ -139,6 +139,10 @@ pub struct Block {
     pub indent: usize,
     /// Populated only for [`BlockKind::Table`].
     pub table: Option<Table>,
+    /// An image to draw *instead of* this block's own rendering. Set for
+    /// mermaid blocks that were rendered through `mmdc`, so the block stays a
+    /// code block for yanking while displaying as a picture.
+    pub image: Option<ImageId>,
     /// Whether a blank line separates this block from the one before it.
     /// False inside tight lists.
     pub blank_before: bool,
@@ -154,6 +158,7 @@ impl Block {
             prefix: Vec::new(),
             indent: 0,
             table: None,
+            image: None,
             blank_before: true,
         }
     }
