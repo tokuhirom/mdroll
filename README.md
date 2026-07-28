@@ -12,6 +12,12 @@ color.
 The name is `md` + *roll*, after 絵巻 (emaki), the horizontal picture scrolls you
 read by unrolling sideways.
 
+![mdroll rendering a document with an inline image, a mermaid flowchart, a table, and an alert](doc/screenshot.png)
+
+<sub>Rendering `doc/demo.md` with the Dracula theme. Captured in kitty, which
+does not implement DECDHL, so the heading is not shown at double height —
+see [Terminal support](#terminal-support).</sub>
+
 ---
 
 ## Why
