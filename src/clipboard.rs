@@ -61,7 +61,12 @@ mod tests {
         let seq = osc52("日本語");
         assert!(seq.starts_with("\x1b]52;c;"));
         assert!(seq.ends_with('\x07'));
-        let payload = seq.trim_start_matches("\x1b]52;c;").trim_end_matches('\x07');
-        assert_eq!(String::from_utf8(STANDARD.decode(payload).unwrap()).unwrap(), "日本語");
+        let payload = seq
+            .trim_start_matches("\x1b]52;c;")
+            .trim_end_matches('\x07');
+        assert_eq!(
+            String::from_utf8(STANDARD.decode(payload).unwrap()).unwrap(),
+            "日本語"
+        );
     }
 }

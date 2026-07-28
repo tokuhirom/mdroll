@@ -84,8 +84,11 @@ $ cd mdroll
 $ cargo build --release
 ```
 
-Prebuilt binaries for macOS, Linux, and Windows are attached to each
-[release](https://github.com/tokuhirom/mdroll/releases).
+Prebuilt binaries are attached to each
+[release](https://github.com/tokuhirom/mdroll/releases): macOS on Intel and
+Apple silicon, Linux on x86-64 and arm64 (statically linked against musl, so
+there is no glibc version to match), and Windows on x86-64. `mise` picks the
+right one for your machine automatically.
 
 ---
 
@@ -95,7 +98,12 @@ Prebuilt binaries for macOS, Linux, and Windows are attached to each
 $ mdroll README.md
 $ cat README.md | mdroll
 $ mdroll                      # browse *.md from the current directory
+$ mdroll README.md | less -R  # piped output renders once and exits
 ```
+
+When stdout is not a terminal, `mdroll` renders the whole document to stdout and
+exits instead of trying to page it — the same thing a pager does when it is not
+on a terminal.
 
 ### Options
 
@@ -110,6 +118,8 @@ $ mdroll                      # browse *.md from the current directory
 | `--mouse` | Enable mouse capture (needed for image click actions). Off by default. |
 | `--no-images` | Disable inline image rendering. |
 | `--no-color` | Plain output, no ANSI styling. |
+| `-z`, `--no-big-headings` | Never use DECDHL double-height headings. |
+| `--ambiguous-wide` | Treat East Asian Ambiguous characters as two columns. |
 | `--config <PATH>` | Use an alternate config file. |
 
 Environment variables: `MDROLL_THEME`, `MDROLL_CONFIG`, `NO_COLOR`.
@@ -559,8 +569,35 @@ and in-viewer copying, which is the gap this fills.
 ## Contributing
 
 Issues and pull requests are welcome. For anything involving text measurement or
-line breaking, please include a test case with the actual string — CJK width
-bugs are almost impossible to reason about from a description alone.
+line breaking, please include a test case with the actual string — width bugs
+are almost impossible to reason about from a description alone.
+
+### Development
+
+```console
+$ cargo test
+$ cargo clippy --all-targets -- -D warnings
+$ cargo fmt --all
+```
+
+Git hooks are managed with [lefthook](https://lefthook.dev). `pre-commit` runs
+the formatter check and clippy; `pre-push` runs the tests:
+
+```console
+$ mise use -g lefthook   # or: brew install lefthook
+$ lefthook install
+```
+
+`tools/screenshot.sh` renders a document in a real terminal on a headless X
+server and saves a PNG, which is how the screenshot above is produced:
+
+```console
+$ cargo build --release
+$ tools/screenshot.sh tests/fixtures/kitchen-sink.md shot.png --theme dracula
+```
+
+Note that it drives kitty, which does not implement DECDHL, so double-height
+headings never appear in screenshots taken this way.
 
 ---
 

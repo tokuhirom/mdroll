@@ -30,7 +30,10 @@ pub const HELP: &str = include_str!("../doc/help.md");
 pub enum Mode {
     Normal,
     /// Typing a search pattern. `forward` records which way `n` will go.
-    Search { query: String, forward: bool },
+    Search {
+        query: String,
+        forward: bool,
+    },
     /// Every visible link is labelled; the next keystroke picks one.
     LinkPick,
     /// Extending a line selection with `j`/`k`.
@@ -336,12 +339,19 @@ impl App {
         }
         self.hoffset = 0;
         self.relayout();
-        self.toast(if self.source_view { "source" } else { "rendered" });
+        self.toast(if self.source_view {
+            "source"
+        } else {
+            "rendered"
+        });
     }
 
     pub fn cycle_theme(&mut self) {
         let names = theme::available_names();
-        let idx = names.iter().position(|n| *n == self.theme.name).unwrap_or(0);
+        let idx = names
+            .iter()
+            .position(|n| *n == self.theme.name)
+            .unwrap_or(0);
         let next = &names[(idx + 1) % names.len()];
         if let Ok(theme) = theme::load(next) {
             self.settings.theme = theme.name.clone();
@@ -454,9 +464,9 @@ impl App {
                 .map(|b| self.active_doc().source_of(b))
                 .or_else(|| self.selected_source()),
             Yank::Rendered => self.cursor_rendered_text(),
-            Yank::CodeBody => self.cursor_block().and_then(|b| {
-                matches!(b.kind, BlockKind::Code { .. }).then(|| b.text())
-            }),
+            Yank::CodeBody => self
+                .cursor_block()
+                .and_then(|b| matches!(b.kind, BlockKind::Code { .. }).then(|| b.text())),
             Yank::Path => self
                 .path
                 .as_ref()
@@ -632,10 +642,7 @@ impl App {
         }
         let from = self.scroll;
         let next = if forward {
-            self.matches
-                .iter()
-                .position(|m| m.line > from)
-                .unwrap_or(0)
+            self.matches.iter().position(|m| m.line > from).unwrap_or(0)
         } else {
             self.matches
                 .iter()
@@ -971,7 +978,11 @@ pub fn find_matches(lines: &[Line], query: &str, calc: &WidthCalc) -> Vec<Match>
     let mut out = Vec::new();
     for (i, line) in lines.iter().enumerate() {
         let text = line.text();
-        let hay = if fold { text.to_lowercase() } else { text.clone() };
+        let hay = if fold {
+            text.to_lowercase()
+        } else {
+            text.clone()
+        };
         let mut from = 0usize;
         while let Some(found) = hay[from..].find(&needle) {
             let start = from + found;
@@ -1134,8 +1145,11 @@ mod tests {
         a.on_key(&mut sink, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
             .unwrap();
         assert_eq!(a.cursor, Some(1));
-        a.on_key(&mut sink, KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE))
-            .unwrap();
+        a.on_key(
+            &mut sink,
+            KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE),
+        )
+        .unwrap();
         assert_eq!(a.cursor, Some(0));
     }
 
@@ -1197,8 +1211,11 @@ mod tests {
     fn line_selection_extends_and_yanks() {
         let mut a = app("one\n\ntwo\n\nthree\n");
         let mut sink = Vec::new();
-        a.on_key(&mut sink, KeyEvent::new(KeyCode::Char('V'), KeyModifiers::SHIFT))
-            .unwrap();
+        a.on_key(
+            &mut sink,
+            KeyEvent::new(KeyCode::Char('V'), KeyModifiers::SHIFT),
+        )
+        .unwrap();
         assert_eq!(a.mode, Mode::Select);
         press(&mut a, 'j');
         assert_eq!(a.selection, Some((0, 1)));

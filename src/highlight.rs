@@ -111,7 +111,10 @@ mod tests {
         )
         .expect("rust is a known language");
         let colours: std::collections::HashSet<_> = spans.iter().map(|s| s.style.fg).collect();
-        assert!(colours.len() > 2, "expected several colours, got {colours:?}");
+        assert!(
+            colours.len() > 2,
+            "expected several colours, got {colours:?}"
+        );
     }
 
     #[test]

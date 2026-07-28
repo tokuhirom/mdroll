@@ -188,7 +188,12 @@ pub fn slice_spans(spans: &[Span], start: usize, end: usize) -> Vec<Span> {
 /// This is what horizontal scrolling is built on. The offset is in display
 /// columns, never bytes: a full-width character straddling either edge becomes
 /// a single space so the row stays exactly as wide as the window.
-pub fn slice_spans_columns(spans: &[Span], start: usize, len: usize, calc: &WidthCalc) -> Vec<Span> {
+pub fn slice_spans_columns(
+    spans: &[Span],
+    start: usize,
+    len: usize,
+    calc: &WidthCalc,
+) -> Vec<Span> {
     if len == 0 {
         return Vec::new();
     }
@@ -290,7 +295,10 @@ mod tests {
 
     #[test]
     fn latin_breaks_at_spaces() {
-        assert_eq!(wrap("the quick brown fox", 10), vec!["the quick", "brown fox"]);
+        assert_eq!(
+            wrap("the quick brown fox", 10),
+            vec!["the quick", "brown fox"]
+        );
     }
 
     #[test]
@@ -375,7 +383,13 @@ mod tests {
     fn slice_spans_respects_span_boundaries() {
         let spans = vec![
             Span::plain("hello "),
-            Span::new("world", Style { bold: true, ..Style::PLAIN }),
+            Span::new(
+                "world",
+                Style {
+                    bold: true,
+                    ..Style::PLAIN
+                },
+            ),
         ];
         let got = slice_spans(&spans, 3, 8);
         assert_eq!(got.len(), 2);
@@ -388,7 +402,13 @@ mod tests {
     fn wrap_spans_keeps_styles_across_the_break() {
         let spans = vec![
             Span::plain("plain text "),
-            Span::new("bold text here", Style { bold: true, ..Style::PLAIN }),
+            Span::new(
+                "bold text here",
+                Style {
+                    bold: true,
+                    ..Style::PLAIN
+                },
+            ),
         ];
         let rows = wrap_spans(&spans, 12, &CALC);
         assert!(rows.len() > 1);

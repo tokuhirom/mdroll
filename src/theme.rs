@@ -16,8 +16,14 @@ use std::path::Path;
 pub const BUNDLED: &[(&str, &str)] = &[
     ("terminal", include_str!("../themes/terminal.toml")),
     ("dracula", include_str!("../themes/dracula.toml")),
-    ("solarized-dark", include_str!("../themes/solarized-dark.toml")),
-    ("solarized-light", include_str!("../themes/solarized-light.toml")),
+    (
+        "solarized-dark",
+        include_str!("../themes/solarized-dark.toml"),
+    ),
+    (
+        "solarized-light",
+        include_str!("../themes/solarized-light.toml"),
+    ),
     ("nord", include_str!("../themes/nord.toml")),
     ("gruvbox", include_str!("../themes/gruvbox.toml")),
 ];
@@ -71,7 +77,11 @@ pub fn parse_color(s: &str) -> Result<Color> {
             }
             6 => {
                 let v = u32::from_str_radix(hex, 16).context("bad hex color")?;
-                (((v >> 16) & 0xff) as u8, ((v >> 8) & 0xff) as u8, (v & 0xff) as u8)
+                (
+                    ((v >> 16) & 0xff) as u8,
+                    ((v >> 8) & 0xff) as u8,
+                    (v & 0xff) as u8,
+                )
             }
             _ => bail!("color {s:?} must be #rgb or #rrggbb"),
         };
@@ -272,7 +282,11 @@ impl Theme {
         for (i, key) in ["h1", "h2", "h3", "h4", "h5", "h6"].iter().enumerate() {
             // Unspecified levels inherit the deepest level that was given, so a
             // theme defining only h1..h3 still styles h4..h6 sensibly.
-            let fallback = if i == 0 { t.headings[0] } else { t.headings[i - 1] };
+            let fallback = if i == 0 {
+                t.headings[0]
+            } else {
+                t.headings[i - 1]
+            };
             t.headings[i] = take(&file.heading, key, fallback)?;
         }
 
@@ -312,7 +326,7 @@ impl Theme {
     }
 
     pub fn heading(&self, level: u8) -> Style {
-        let idx = (level.max(1).min(6) - 1) as usize;
+        let idx = (level.clamp(1, 6) - 1) as usize;
         self.headings[idx]
     }
 
@@ -368,7 +382,8 @@ pub fn load(name: &str) -> Result<Theme> {
 }
 
 pub fn load_path(path: &Path) -> Result<Theme> {
-    let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let text =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     Theme::parse(&text).with_context(|| format!("in {}", path.display()))
 }
 
@@ -432,6 +447,9 @@ mod tests {
     #[test]
     fn terminal_theme_sets_no_background() {
         let theme = load("terminal").unwrap();
-        assert!(theme.background.is_none(), "terminal theme must inherit the terminal palette");
+        assert!(
+            theme.background.is_none(),
+            "terminal theme must inherit the terminal palette"
+        );
     }
 }

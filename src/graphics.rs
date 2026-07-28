@@ -228,11 +228,14 @@ impl ImageStore {
         let kitty_id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1).max(1);
         transmit(out, kitty_id, &png)?;
-        self.uploaded.insert(id, Entry {
-            kitty_id,
-            cols,
-            rows,
-        });
+        self.uploaded.insert(
+            id,
+            Entry {
+                kitty_id,
+                cols,
+                rows,
+            },
+        );
         Ok(Some(kitty_id))
     }
 }
@@ -262,7 +265,10 @@ fn transmit<W: Write>(out: &mut W, kitty_id: u32, png: &[u8]) -> Result<()> {
         let more = u8::from(i + 1 < chunks.len());
         if i == 0 {
             // f=100 is "the payload is a PNG"; q=2 suppresses the reply.
-            write!(out, "\x1b_Ga=t,f=100,i={kitty_id},q=2,m={more};{chunk}\x1b\\")?;
+            write!(
+                out,
+                "\x1b_Ga=t,f=100,i={kitty_id},q=2,m={more};{chunk}\x1b\\"
+            )?;
         } else {
             write!(out, "\x1b_Gm={more};{chunk}\x1b\\")?;
         }
@@ -312,7 +318,7 @@ mod tests {
         let mut store = ImageStore::disabled();
         let mut out = Vec::new();
         store.clear_placements(&mut out).unwrap();
-        assert!(store.place(&mut out, 0, 10, 5, 0, 5).unwrap() == false);
+        assert!(!store.place(&mut out, 0, 10, 5, 0, 5).unwrap());
         assert!(out.is_empty());
     }
 
@@ -332,7 +338,10 @@ mod tests {
         let text = String::from_utf8(out).unwrap();
         assert!(text.starts_with("\x1b_Ga=t,f=100,i=7,q=2,m=1;"));
         assert!(text.contains("\x1b_Gm=1;"), "middle chunks continue");
-        assert!(text.contains("\x1b_Gm=0;"), "the last chunk ends the sequence");
+        assert!(
+            text.contains("\x1b_Gm=0;"),
+            "the last chunk ends the sequence"
+        );
     }
 
     #[test]
@@ -348,11 +357,14 @@ mod tests {
     fn re_registering_a_different_path_invalidates_the_upload() {
         let mut store = ImageStore::new(Protocol::Kitty, CELL);
         store.register(0, PathBuf::from("a.png"));
-        store.uploaded.insert(0, Entry {
-            kitty_id: 1,
-            cols: 4,
-            rows: 4,
-        });
+        store.uploaded.insert(
+            0,
+            Entry {
+                kitty_id: 1,
+                cols: 4,
+                rows: 4,
+            },
+        );
         store.register(0, PathBuf::from("b.png"));
         assert!(store.uploaded.is_empty());
     }
@@ -360,11 +372,14 @@ mod tests {
     #[test]
     fn placement_crops_the_top_when_scrolled_partly_off_screen() {
         let mut store = ImageStore::new(Protocol::Kitty, CELL);
-        store.uploaded.insert(0, Entry {
-            kitty_id: 9,
-            cols: 10,
-            rows: 8,
-        });
+        store.uploaded.insert(
+            0,
+            Entry {
+                kitty_id: 9,
+                cols: 10,
+                rows: 8,
+            },
+        );
         let mut out = Vec::new();
         assert!(store.place(&mut out, 0, 10, 8, 3, 5).unwrap());
         let text = String::from_utf8(out).unwrap();

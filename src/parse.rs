@@ -174,7 +174,12 @@ impl<'t> Builder<'t> {
             }
 
             NodeValue::HtmlBlock(html) => {
-                let mut block = Block::new(BlockKind::Code { lang: Some("html".into()) }, range);
+                let mut block = Block::new(
+                    BlockKind::Code {
+                        lang: Some("html".into()),
+                    },
+                    range,
+                );
                 block.spans = vec![Span::new(
                     html.literal.trim_end_matches('\n').to_string(),
                     self.theme.dim,
@@ -213,7 +218,8 @@ impl<'t> Builder<'t> {
                     if i > 0 {
                         self.pending_blank = !list.tight;
                     }
-                    self.pending_prefix = Some(self.item_marker(item, &list.list_type, &mut ordinal));
+                    self.pending_prefix =
+                        Some(self.item_marker(item, &list.list_type, &mut ordinal));
                     let outer_indent = self.indent;
                     self.item(item);
                     self.indent = outer_indent;
@@ -354,7 +360,12 @@ impl<'t> Builder<'t> {
         self.push(block);
     }
 
-    fn inlines<'a>(&mut self, node: &'a AstNode<'a>, style: Style, link: Option<LinkId>) -> Vec<Span> {
+    fn inlines<'a>(
+        &mut self,
+        node: &'a AstNode<'a>,
+        style: Style,
+        link: Option<LinkId>,
+    ) -> Vec<Span> {
         let mut out = Vec::new();
         for child in node.children() {
             self.inline(child, style, link, &mut out);
@@ -571,7 +582,10 @@ mod tests {
     fn emphasis_nests() {
         let d = doc("**bold *and italic* here**\n");
         let spans = &d.blocks[0].spans;
-        let nested = spans.iter().find(|s| s.text.contains("and italic")).unwrap();
+        let nested = spans
+            .iter()
+            .find(|s| s.text.contains("and italic"))
+            .unwrap();
         assert!(nested.style.bold && nested.style.italic);
     }
 

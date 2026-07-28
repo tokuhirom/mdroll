@@ -206,7 +206,11 @@ impl Document {
     /// The original Markdown for a block, verbatim.
     pub fn source_of(&self, block: &Block) -> String {
         let start = block.source_range.start.saturating_sub(1);
-        let end = block.source_range.end.saturating_sub(1).min(self.source_lines.len());
+        let end = block
+            .source_range
+            .end
+            .saturating_sub(1)
+            .min(self.source_lines.len());
         if start >= end {
             return String::new();
         }
@@ -242,7 +246,10 @@ pub struct Rect {
 
 impl Rect {
     pub fn contains(&self, x: u16, y: u16) -> bool {
-        x >= self.x && x < self.x.saturating_add(self.w) && y >= self.y && y < self.y.saturating_add(self.h)
+        x >= self.x
+            && x < self.x.saturating_add(self.w)
+            && y >= self.y
+            && y < self.y.saturating_add(self.h)
     }
 }
 

@@ -126,7 +126,7 @@ impl Renderer {
         let view = frame.screen.viewport();
         let mut placement = Placement::default();
 
-        queue!(out, SetAttribute(Attribute::Reset))?;
+        self.reset(out)?;
         queue!(out, Clear(ClearType::All))?;
         // Last frame's images are gone with the clear on some terminals and
         // not on others; deleting the placements explicitly makes it uniform.
@@ -146,7 +146,7 @@ impl Renderer {
                 break;
             }
             self.draw_line(out, frame, idx, line, y, &mut placement)?;
-            self.place_images(out, frame, line, y, view.rows, images, &mut placed)?;
+            self.place_images(out, frame, line, y, images, &mut placed)?;
             y += rows;
             idx += 1;
         }
@@ -168,10 +168,29 @@ impl Renderer {
                 out.write_all(" ".repeat(pad).as_bytes())?;
             }
         }
-        queue!(out, SetAttribute(Attribute::Reset))?;
+        self.reset(out)?;
         out.write_all(DECAWM_ON.as_bytes())?;
         out.flush()?;
         Ok(placement)
+    }
+
+    /// Emit an SGR reset, unless colour is off entirely.
+    fn reset<W: Write>(&self, out: &mut W) -> Result<()> {
+        if !self.no_color {
+            queue!(out, SetAttribute(Attribute::Reset))?;
+        }
+        Ok(())
+    }
+
+    /// Write one laid-out row plus a newline, with no cursor positioning.
+    ///
+    /// Used when stdout is a pipe rather than a terminal, where the document is
+    /// printed in full instead of being paged.
+    pub fn write_line<W: Write>(&self, out: &mut W, line: &Line) -> Result<()> {
+        self.write_spans(out, &line.spans, None)?;
+        self.reset(out)?;
+        out.write_all(b"\n")?;
+        Ok(())
     }
 
     /// Put any image starting on, or continuing through, this row on screen.
@@ -184,10 +203,10 @@ impl Renderer {
         frame: &Frame<'_>,
         line: &Line,
         y: u16,
-        rows: u16,
         images: &mut ImageStore,
         placed: &mut HashSet<usize>,
     ) -> Result<()> {
+        let rows = frame.screen.viewport().rows;
         // Horizontal scrolling would need the image cropped on the left too;
         // until then, no-wrap mode falls back to the reserved blank cells.
         if frame.hoffset > 0 {
@@ -238,7 +257,7 @@ impl Renderer {
                 out.write_all(if double { prefix } else { DECSWL }.as_bytes())?;
             }
             self.write_spans(out, &visible, Some(frame.links))?;
-            queue!(out, SetAttribute(Attribute::Reset))?;
+            self.reset(out)?;
         }
 
         for hit in &line.hits {
@@ -363,7 +382,13 @@ impl Renderer {
 }
 
 /// Restyle the display-column range `[start, end)` of a row.
-fn apply_range(spans: &[Span], start: usize, end: usize, style: Style, calc: &WidthCalc) -> Vec<Span> {
+fn apply_range(
+    spans: &[Span],
+    start: usize,
+    end: usize,
+    style: Style,
+    calc: &WidthCalc,
+) -> Vec<Span> {
     let mut out: Vec<Span> = Vec::new();
     let mut col = 0usize;
     for span in spans {
@@ -597,7 +622,11 @@ mod tests {
     fn a_double_height_line_costs_two_rows() {
         let mut big = Line::new(1, 0, vec![Span::plain("BIG")]);
         big.scale = Scale::DoubleHeight;
-        let lines = vec![big, Line::new(2, 0, vec![Span::plain("a")]), Line::new(3, 0, vec![Span::plain("b")])];
+        let lines = vec![
+            big,
+            Line::new(2, 0, vec![Span::plain("a")]),
+            Line::new(3, 0, vec![Span::plain("b")]),
+        ];
         let bottom = vec![];
         let raw = frame_bytes(&basic_frame(&lines, &bottom));
         let text = String::from_utf8_lossy(&raw);
@@ -665,13 +694,23 @@ mod tests {
         let lines = vec![Line::new(
             1,
             0,
-            vec![Span::new("x", Style { bold: true, ..Style::PLAIN })],
+            vec![Span::new(
+                "x",
+                Style {
+                    bold: true,
+                    ..Style::PLAIN
+                },
+            )],
         )];
         let mut renderer = Renderer::new(WidthCalc::default());
         renderer.no_color = true;
         let mut buf = Vec::new();
         renderer
-            .draw(&mut buf, &basic_frame(&lines, &[]), &mut ImageStore::disabled())
+            .draw(
+                &mut buf,
+                &basic_frame(&lines, &[]),
+                &mut ImageStore::disabled(),
+            )
             .unwrap();
         let text = String::from_utf8_lossy(&buf);
         assert!(!text.contains("\x1b[1m"));

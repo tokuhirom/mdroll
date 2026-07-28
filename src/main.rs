@@ -38,15 +38,60 @@ fn main() -> Result<()> {
         GraphicsInfo::disabled()
     };
     let mut app = App::new(text, path, settings, theme, current_screen()?, graphics);
+
+    // Piped output means nobody is there to press a key. Render the whole
+    // document once and exit, the way a pager does when it is not on a
+    // terminal, rather than failing to enter raw mode.
+    if !std::io::stdout().is_terminal() {
+        return dump(&mut app);
+    }
     run(&mut app)
+}
+
+/// Write the entire rendered document to stdout and return.
+fn dump(app: &mut App) -> Result<()> {
+    let cols = app.screen.cols;
+    // One row per line, so nothing is cut off, and no double-height headings,
+    // which only make sense on a live terminal.
+    app.double_height = false;
+    app.screen = Screen::new(cols, u16::MAX);
+    app.relayout();
+
+    let mut renderer = Renderer::new(app.calc());
+    renderer.no_color = app.settings.no_color;
+    renderer.hyperlinks = false;
+
+    let mut out = std::io::BufWriter::new(std::io::stdout());
+    for line in &app.lines {
+        // `mdroll README.md | head` closes the pipe early. That is the reader
+        // saying it has had enough, not an error to report.
+        if let Err(err) = renderer.write_line(&mut out, line) {
+            return if is_broken_pipe(&err) {
+                Ok(())
+            } else {
+                Err(err)
+            };
+        }
+    }
+    match out.flush() {
+        Err(err) if err.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        other => Ok(other?),
+    }
+}
+
+fn is_broken_pipe(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<std::io::Error>()
+        .is_some_and(|e| e.kind() == std::io::ErrorKind::BrokenPipe)
 }
 
 /// Command line → environment → config file → built-in default.
 fn resolve(cli: &Cli) -> Result<Settings> {
-    let mut settings = Settings::default();
     // Capability detection sets the default; the config file and the command
     // line can still override it in either direction.
-    settings.double_height = detect_double_height();
+    let mut settings = Settings {
+        double_height: detect_double_height(),
+        ..Settings::default()
+    };
 
     let config_path = cli
         .config
@@ -117,8 +162,11 @@ fn read_input(cli: &Cli) -> Result<(String, Option<PathBuf>)> {
 }
 
 fn current_screen() -> Result<Screen> {
-    let (cols, rows) = crossterm::terminal::size()?;
-    Ok(Screen::new(cols, rows))
+    match crossterm::terminal::size() {
+        Ok((cols, rows)) => Ok(Screen::new(cols, rows)),
+        // No terminal at all, as when both ends are pipes.
+        Err(_) => Ok(Screen::new(80, 24)),
+    }
 }
 
 /// Owns the terminal mode changes so they are undone even on an error path.
@@ -174,9 +222,7 @@ fn run(app: &mut App) -> Result<()> {
             Event::Mouse(mouse) => match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) => {
                     let url = match app.placement.target_at(mouse.column, mouse.row) {
-                        Some(HitTarget::Link(id)) => {
-                            app.doc.links.get(id.0).map(|l| l.url.clone())
-                        }
+                        Some(HitTarget::Link(id)) => app.doc.links.get(id.0).map(|l| l.url.clone()),
                         Some(HitTarget::Image(id)) => {
                             app.doc.images.get(id.0).map(|i| i.url.clone())
                         }

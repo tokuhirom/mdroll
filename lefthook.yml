@@ -1,0 +1,24 @@
+# Git hooks, managed by lefthook: https://lefthook.dev
+#
+#   mise use -g lefthook   # or: brew install lefthook
+#   lefthook install
+#
+# Skip a hook once with LEFTHOOK=0, e.g. `LEFTHOOK=0 git commit`.
+
+pre-commit:
+  parallel: true
+  commands:
+    fmt:
+      glob: "*.rs"
+      # --check rather than rewriting: a hook that edits files under you makes
+      # the staged content disagree with what you reviewed.
+      run: cargo fmt --all --check
+      fail_text: "run `cargo fmt --all`"
+    clippy:
+      glob: "*.rs"
+      run: cargo clippy --all-targets --all-features -- -D warnings
+
+pre-push:
+  commands:
+    test:
+      run: cargo test --all-features

@@ -13,18 +13,11 @@ use unicode_width::UnicodeWidthChar;
 /// this is only used by [`expand_tabs`].
 pub const TAB_STOP: usize = 4;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct WidthCalc {
-    /// Treat East Asian Ambiguous characters as two columns wide.
+    /// Treat East Asian Ambiguous characters as two columns wide. Defaults to
+    /// narrow, matching a terminal that has not been told otherwise.
     pub ambiguous_wide: bool,
-}
-
-impl Default for WidthCalc {
-    fn default() -> Self {
-        WidthCalc {
-            ambiguous_wide: false,
-        }
-    }
 }
 
 impl WidthCalc {

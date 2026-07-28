@@ -485,8 +485,7 @@ impl<'a> Ctx<'a> {
                 let target = HitTarget::Link(link);
                 match hits.last_mut() {
                     Some(last)
-                        if last.target == target
-                            && (last.rect.x + last.rect.w) as usize == x =>
+                        if last.target == target && (last.rect.x + last.rect.w) as usize == x =>
                     {
                         last.rect.w = last.rect.w.saturating_add(w as u16);
                     }
@@ -725,7 +724,8 @@ mod tests {
 
     #[test]
     fn a_wide_table_is_shrunk_to_fit_when_wrapping() {
-        let src = "| a | b |\n| --- | --- |\n| a very long cell indeed | another very long cell |\n";
+        let src =
+            "| a | b |\n| --- | --- |\n| a very long cell indeed | another very long cell |\n";
         let out = wrapped(src, 30);
         let calc = WidthCalc::default();
         assert!(out.iter().all(|l| calc.str(l) <= 30), "{out:#?}");
@@ -789,7 +789,10 @@ mod tests {
         );
         assert!(lines.iter().all(|l| l.scale == Scale::DoubleHeight));
         let calc = WidthCalc::default();
-        assert!(lines.iter().all(|l| calc.str(&l.text()) <= 12), "{lines:#?}");
+        assert!(
+            lines.iter().all(|l| calc.str(&l.text()) <= 12),
+            "{lines:#?}"
+        );
     }
 
     #[test]
@@ -839,7 +842,10 @@ mod tests {
         for (i, line) in tagged.iter().enumerate() {
             let hit = line.hits[0];
             assert_eq!(hit.target, HitTarget::Image(ImageId(0)));
-            assert_eq!(hit.rect.y, i as u16, "each row knows its place in the image");
+            assert_eq!(
+                hit.rect.y, i as u16,
+                "each row knows its place in the image"
+            );
             assert_eq!(hit.rect.h, 10);
             assert_eq!(hit.rect.w, 40);
         }
