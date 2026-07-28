@@ -14,6 +14,7 @@ anyhow = "1.0.104"
 arboard = { version = "3.6.1", default-features = false }
 base64 = "0.23.0"
 clap = { version = "4.6.4", features = ["derive"] }
+clap_mangen = "0.3.0"
 comrak = { version = "0.54.0", default-features = false }
 crossterm = "0.29.0"
 dirs = "6.0.0"

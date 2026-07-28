@@ -19,7 +19,23 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 fn main() -> Result<()> {
+    match real_main() {
+        // A closed pipe is the reader saying it has had enough, not an error.
+        Err(err) if is_broken_pipe(&err) => Ok(()),
+        other => other,
+    }
+}
+
+fn real_main() -> Result<()> {
     let cli = Cli::parse();
+
+    if cli.man {
+        // Generated from the same definition the parser uses, so it cannot
+        // drift: `mdroll --man > mdroll.1`.
+        let mut out = std::io::stdout();
+        clap_mangen::Man::new(<Cli as clap::CommandFactory>::command()).render(&mut out)?;
+        return Ok(());
+    }
 
     if cli.list_themes {
         for name in theme::available_names() {

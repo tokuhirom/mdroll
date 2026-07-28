@@ -130,10 +130,7 @@ pub fn parse_key(spec: &str) -> Option<(KeyCode, KeyModifiers)> {
     let mut modifiers = KeyModifiers::NONE;
     let mut rest = spec;
 
-    loop {
-        let Some((head, tail)) = rest.split_once(['-', '+']) else {
-            break;
-        };
+    while let Some((head, tail)) = rest.split_once(['-', '+']) {
         // A bare "-" or "+" is the key itself, not a modifier separator.
         let modifier = match head.to_ascii_lowercase().as_str() {
             "ctrl" | "c" => KeyModifiers::CONTROL,

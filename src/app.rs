@@ -15,7 +15,7 @@ use crate::screen::Screen;
 use crate::theme::{self, Theme};
 use crate::width::WidthCalc;
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -1172,6 +1172,7 @@ pub fn browser_markdown(dir: &Path) -> String {
 mod tests {
     use super::*;
     use crate::screen::Screen;
+    use crossterm::event::KeyModifiers;
 
     fn app(src: &str) -> App {
         App::new(

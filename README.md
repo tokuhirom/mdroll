@@ -123,6 +123,9 @@ on a terminal.
 | `--ambiguous-wide` | Treat East Asian Ambiguous characters as two columns. |
 | `--config <PATH>` | Use an alternate config file. |
 
+`mdroll --man > mdroll.1` writes a man page, generated from the same definition
+the argument parser uses so it cannot drift.
+
 Environment variables: `MDROLL_THEME`, `MDROLL_CONFIG`, `NO_COLOR`.
 
 Precedence is **command line → environment → config file → built-in default**.
@@ -551,7 +554,7 @@ Key specs are a single character, a name such as `Esc`, `Space`, `Tab`,
 - [x] Key remapping through config
 - [ ] Rasterized heading fallback for non-DECDHL terminals
 - [x] Release automation, binaries for macOS/Linux/Windows
-- [ ] Documentation and man page
+- [x] Documentation and man page (`mdroll --man > mdroll.1`)
 
 ### Beyond
 

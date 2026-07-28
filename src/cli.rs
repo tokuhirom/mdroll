@@ -23,6 +23,10 @@ pub struct Cli {
     #[arg(long)]
     pub list_themes: bool,
 
+    /// Write a roff man page to stdout and exit.
+    #[arg(long, hide = true)]
+    pub man: bool,
+
     /// Start in reflow mode.
     #[arg(long, conflicts_with = "no_wrap")]
     pub wrap: bool,
