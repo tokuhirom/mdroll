@@ -88,6 +88,7 @@ pub struct App {
     /// Graphics capability and cell geometry, detected once at startup.
     pub graphics: Protocol,
     pub cell: CellSize,
+    pub raster_headings: bool,
     pub images: ImageStore,
 }
 
@@ -97,6 +98,9 @@ pub struct App {
 pub struct GraphicsInfo {
     pub protocol: Protocol,
     pub cell: CellSize,
+    /// Draw headings as bitmaps because the terminal has graphics but no
+    /// DECDHL.
+    pub raster_headings: bool,
 }
 
 impl GraphicsInfo {
@@ -104,6 +108,7 @@ impl GraphicsInfo {
         GraphicsInfo {
             protocol: graphics::detect(),
             cell: graphics::cell_size(),
+            raster_headings: false,
         }
     }
 
@@ -111,6 +116,7 @@ impl GraphicsInfo {
         GraphicsInfo {
             protocol: Protocol::None,
             cell: CellSize::default(),
+            raster_headings: false,
         }
     }
 }
@@ -159,7 +165,14 @@ impl App {
             quit: false,
             graphics: graphics.protocol,
             cell: graphics.cell,
-            images: ImageStore::new(graphics.protocol, graphics.cell),
+            raster_headings: graphics.raster_headings,
+            images: {
+                let mut store = ImageStore::new(graphics.protocol, graphics.cell);
+                if graphics.raster_headings {
+                    store.big = crate::bigtext::Renderer::discover();
+                }
+                store
+            },
         };
         // Source view means "show me exactly what is in the file", which only
         // works if one logical line stays on one row.
@@ -869,7 +882,9 @@ impl App {
             hoffset: self.hoffset,
             links: &doc.links,
             bottom: &bottom,
-            double_height: self.double_height,
+            // DECDHL and bitmaps are alternatives, never both at once.
+            double_height: self.double_height && !self.raster_headings,
+            raster_headings: self.double_height && self.raster_headings,
             decor: Decor {
                 cursor_block: self.cursor,
                 selection: self.selection,

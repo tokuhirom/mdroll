@@ -9,6 +9,7 @@
 //! Terminals without graphics support fall back to the alt text, which is
 //! handled in layout rather than here.
 
+use crate::bigtext;
 use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -127,8 +128,16 @@ pub struct ImageStore {
     pub cell: CellSize,
     sources: HashMap<usize, PathBuf>,
     uploaded: HashMap<usize, Entry>,
+    /// Rasterized headings, keyed by their text, colour, and size.
+    text: HashMap<String, u32>,
+    /// Font renderer for big headings, absent when no usable font was found.
+    pub big: Option<bigtext::Renderer>,
     next_id: u32,
 }
+
+/// A document has few headings, but a long session with `--watch` and theme
+/// cycling could otherwise grow the cache without bound.
+const TEXT_CACHE_LIMIT: usize = 256;
 
 impl ImageStore {
     pub fn new(protocol: Protocol, cell: CellSize) -> ImageStore {
@@ -137,6 +146,8 @@ impl ImageStore {
             cell,
             sources: HashMap::new(),
             uploaded: HashMap::new(),
+            text: HashMap::new(),
+            big: None,
             next_id: 1,
         }
     }
@@ -157,6 +168,54 @@ impl ImageStore {
     pub fn forget_all(&mut self) {
         self.sources.clear();
         self.uploaded.clear();
+    }
+
+    /// Whether headings can be drawn as bitmaps on this terminal.
+    pub fn can_rasterize(&self) -> bool {
+        self.protocol.available() && self.big.is_some()
+    }
+
+    /// Draw a heading as a bitmap at the cursor, spanning `cols` by `rows`.
+    ///
+    /// For terminals that have graphics but no DECDHL — kitty and ghostty —
+    /// this is what makes a heading actually bigger rather than merely bolder.
+    pub fn place_text<W: Write>(
+        &mut self,
+        out: &mut W,
+        text: &str,
+        color: (u8, u8, u8),
+        cols: u16,
+        rows: u16,
+    ) -> Result<bool> {
+        if !self.can_rasterize() || cols == 0 || rows == 0 {
+            return Ok(false);
+        }
+        let key = format!("{cols}x{rows}:{},{},{}:{text}", color.0, color.1, color.2);
+        let kitty_id = match self.text.get(&key) {
+            Some(id) => *id,
+            None => {
+                let Some(png) = self
+                    .big
+                    .as_ref()
+                    .and_then(|r| r.render(text, color, cols, rows, self.cell))
+                else {
+                    return Ok(false);
+                };
+                let id = self.next_id;
+                self.next_id = self.next_id.wrapping_add(1).max(1);
+                transmit(out, id, &png)?;
+                if self.text.len() >= TEXT_CACHE_LIMIT {
+                    self.text.clear();
+                }
+                self.text.insert(key, id);
+                id
+            }
+        };
+        write!(
+            out,
+            "\x1b_Ga=p,i={kitty_id},c={cols},r={rows},C=1,q=2\x1b\\"
+        )?;
+        Ok(true)
     }
 
     /// Delete every placement made by the previous frame.

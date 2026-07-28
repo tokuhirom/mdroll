@@ -24,11 +24,11 @@ flowchart LR
 
 - [x] UAX #14 line breaking with kinsoku
 - [x] OSC 8 hyperlinks and [clickable links](https://example.com)
-- [ ] Rasterized headings where DECDHL is unavailable
+- [x] Rasterized headings where DECDHL is unavailable
 
 > [!NOTE]
-> Double-height headings need DECDHL, which this screenshot's terminal does
-> not implement. On WezTerm the title above is twice the size.
+> The headings above are bitmaps: kitty has graphics but no DECDHL, so they
+> are rasterized. On WezTerm the same headings use DECDHL instead.
 
 ```rust
 fn layout(doc: &Document, view: Viewport, opts: &Options) -> Vec<Line> {

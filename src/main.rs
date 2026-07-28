@@ -10,6 +10,7 @@ use crossterm::{cursor, execute};
 use mdroll::app::{App, GraphicsInfo, browser_markdown};
 use mdroll::cli::Cli;
 use mdroll::config::{ConfigFile, Settings, default_config_path, env_var};
+use mdroll::graphics::Protocol;
 use mdroll::ir::HitTarget;
 use mdroll::render::{Renderer, detect_double_height};
 use mdroll::screen::Screen;
@@ -48,11 +49,17 @@ fn real_main() -> Result<()> {
     let theme = theme::load(&settings.theme)?;
     let (text, path) = read_input(&cli)?;
 
-    let graphics = if settings.images {
-        GraphicsInfo::detect()
-    } else {
-        GraphicsInfo::disabled()
-    };
+    // Images can be turned off without giving up big headings, so graphics are
+    // detected either way and only the image path is gated on the setting.
+    let mut graphics = GraphicsInfo::detect();
+    if !settings.images {
+        graphics.protocol = Protocol::None;
+    }
+    // A terminal with graphics but no DECDHL — kitty, ghostty — can still have
+    // big headings, drawn as bitmaps.
+    if settings.double_height && !detect_double_height() && graphics.protocol.available() {
+        graphics.raster_headings = mdroll::bigtext::find_font().is_some();
+    }
     let mut app = App::new(text, path, settings, theme, current_screen()?, graphics);
 
     // Piped output means nobody is there to press a key. Render the whole
@@ -105,7 +112,9 @@ fn resolve(cli: &Cli) -> Result<Settings> {
     // Capability detection sets the default; the config file and the command
     // line can still override it in either direction.
     let mut settings = Settings {
-        double_height: detect_double_height(),
+        // Either DECDHL or a bitmap will do; whether either is available is
+        // settled once the graphics protocol is known.
+        double_height: detect_double_height() || mdroll::graphics::detect().available(),
         ..Settings::default()
     };
 

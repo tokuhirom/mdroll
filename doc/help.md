@@ -25,7 +25,7 @@ Press `H` or `Esc` to close this help.
 | `w` | Toggle wrap / no-wrap |
 | `s` | Toggle rendered / source view |
 | `t` | Cycle theme |
-| `z` | Toggle double-height headings |
+| `z` | Toggle big headings |
 | `i` | Toggle inline images |
 
 ## Copying

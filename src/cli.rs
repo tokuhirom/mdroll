@@ -67,7 +67,7 @@ pub struct Cli {
     #[arg(long)]
     pub watch: bool,
 
-    /// Never use DECDHL double-height headings, even where they are supported.
+    /// Never draw headings at double size, by either method.
     #[arg(short = 'z', long)]
     pub no_big_headings: bool,
 

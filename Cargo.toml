@@ -10,6 +10,7 @@ keywords = ["markdown", "terminal", "viewer", "cjk", "tui"]
 categories = ["command-line-utilities", "text-processing"]
 
 [dependencies]
+ab_glyph = "0.2.32"
 anyhow = "1.0.104"
 arboard = { version = "3.6.1", default-features = false }
 base64 = "0.23.0"

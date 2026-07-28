@@ -81,6 +81,9 @@ pub struct Frame<'a> {
     /// line twice, so the sequences are withheld entirely rather than sent
     /// hopefully.
     pub double_height: bool,
+    /// Draw double-height rows as bitmaps instead. For terminals with graphics
+    /// but no DECDHL, which is exactly kitty and ghostty.
+    pub raster_headings: bool,
 }
 
 /// Where each visible link ended up on screen, for mouse hit testing.
@@ -145,7 +148,11 @@ impl Renderer {
             if y + rows > view.rows {
                 break;
             }
-            self.draw_line(out, frame, idx, line, y, &mut placement)?;
+            if frame.raster_headings && line.scale == Scale::DoubleHeight {
+                self.draw_big_line(out, frame, line, y, images)?;
+            } else {
+                self.draw_line(out, frame, idx, line, y, &mut placement)?;
+            }
             self.place_images(out, frame, line, y, images, &mut placed)?;
             y += rows;
             idx += 1;
@@ -191,6 +198,38 @@ impl Renderer {
         self.reset(out)?;
         out.write_all(b"\n")?;
         Ok(())
+    }
+
+    /// Draw a heading as a bitmap over the two rows the layout reserved.
+    ///
+    /// Falls back to writing the text normally if rasterizing declines, so a
+    /// missing font or an unrenderable string still leaves a readable heading.
+    fn draw_big_line<W: Write>(
+        &self,
+        out: &mut W,
+        frame: &Frame<'_>,
+        line: &Line,
+        y: u16,
+        images: &mut ImageStore,
+    ) -> Result<()> {
+        let text = line.text();
+        let trimmed = text.trim_end();
+        // The layout halved the column budget for this row, so the bitmap gets
+        // twice the columns the text would occupy at normal size.
+        let cols = ((self.calc.str(trimmed) * 2) as u16).min(frame.screen.cols);
+        let color = line
+            .spans
+            .iter()
+            .find_map(|s| s.style.fg)
+            .and_then(rgb_of)
+            .unwrap_or((200, 200, 200));
+
+        queue!(out, MoveTo(0, y))?;
+        if images.place_text(out, trimmed, color, cols, 2)? {
+            return Ok(());
+        }
+        let mut placement = Placement::default();
+        self.draw_line(out, frame, 0, line, y, &mut placement)
     }
 
     /// Put any image starting on, or continuing through, this row on screen.
@@ -477,6 +516,15 @@ pub fn detect_double_height() -> bool {
         || term.starts_with("foot")
 }
 
+/// The RGB a colour would be drawn as, for rasterizing. Palette entries have
+/// no single true answer, so only explicit RGB is rasterized in colour.
+fn rgb_of(color: Color) -> Option<(u8, u8, u8)> {
+    match color {
+        Color::Rgb { r, g, b } => Some((r, g, b)),
+        _ => None,
+    }
+}
+
 pub fn detect_truecolor() -> bool {
     match std::env::var("COLORTERM") {
         Ok(v) => {
@@ -579,6 +627,7 @@ mod tests {
             bottom,
             decor: Decor::default(),
             double_height: true,
+            raster_headings: false,
         }
     }
 

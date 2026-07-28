@@ -12,6 +12,7 @@
 //! state to drift out of sync.
 
 pub mod app;
+pub mod bigtext;
 pub mod cli;
 pub mod clipboard;
 pub mod config;

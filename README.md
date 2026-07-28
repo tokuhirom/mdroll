@@ -14,9 +14,9 @@ read by unrolling sideways.
 
 ![mdroll rendering a document with an inline image, a mermaid flowchart, a table, and an alert](doc/screenshot.png)
 
-<sub>Rendering `doc/demo.md` with the Dracula theme. Captured in kitty, which
-does not implement DECDHL, so the heading is not shown at double height —
-see [Terminal support](#terminal-support).</sub>
+<sub>Rendering `doc/demo.md` with the Dracula theme, captured in kitty. The
+headings there are bitmaps rather than DECDHL, because kitty has graphics but
+no double-height lines — see [Terminal support](#terminal-support).</sub>
 
 ---
 
@@ -49,8 +49,8 @@ gracefully rather than being the design center.
   `**`, and friends as written.
 - **Two layout modes** — reflow to terminal width, or no-wrap with horizontal
   scrolling.
-- **Double-height headings** using DECDHL, so `# Title` renders at twice the
-  size on terminals that support it.
+- **Big headings** — DECDHL double-height lines where they work, and text
+  rasterized to a bitmap where the terminal has graphics instead.
 - **Correct CJK line breaking** via UAX #14, with kinsoku rules applied.
 - **Block yank** — move a cursor over blocks and copy either the original
   Markdown source or the rendered plain text. Works over SSH via OSC 52.
@@ -125,7 +125,7 @@ on a terminal.
 | `--no-images` | Disable inline image rendering. |
 | `--no-color` | Plain output, no ANSI styling. |
 | `--watch` | Reload automatically when the file changes on disk. |
-| `-z`, `--no-big-headings` | Never use DECDHL double-height headings. |
+| `-z`, `--no-big-headings` | Never draw headings at double size, by either method. |
 | `--ambiguous-wide` | Treat East Asian Ambiguous characters as two columns. |
 | `--config <PATH>` | Use an alternate config file. |
 
@@ -180,7 +180,7 @@ gives you the text exactly as written.
 | `w` | Toggle wrap / no-wrap |
 | `s` | Toggle rendered / source view |
 | `t` | Cycle theme |
-| `z` | Toggle double-height headings |
+| `z` | Toggle big headings |
 | `i` | Toggle inline images |
 
 ### Copying
@@ -228,7 +228,8 @@ the ones that depend on what the terminal can actually do.
 | Feature | Works on | Elsewhere |
 | --- | --- | --- |
 | Inline images | WezTerm, kitty, ghostty | Alt text, dimmed |
-| Double-height headings | WezTerm, xterm, foot | Colour and weight only |
+| Big headings, via DECDHL | WezTerm, xterm, foot | see below |
+| Big headings, rasterized | kitty, ghostty | Colour and weight only |
 | Clickable links (OSC 8) | Most modern terminals | Use `F` or `o` instead |
 | Clipboard over SSH (OSC 52) | Most modern terminals | Enable it in your terminal |
 | Truecolor | `COLORTERM=truecolor` | Nearest 256-color match |
@@ -396,9 +397,15 @@ visibly broken output rather than a graceful no-op, detection is an allowlist
 rather than a denylist: WezTerm, xterm, and foot get double-height headings, and
 everything else gets colour and weight. `-z` forces them off anywhere.
 
-An alternative rasterized path (rendering heading text to a bitmap at an
-arbitrary point size and placing it with the Kitty graphics protocol) is planned
-for terminals where DECDHL is unavailable but graphics are not.
+Where DECDHL is unavailable but graphics are not — kitty and ghostty, exactly —
+the heading is instead rendered to a bitmap at twice the cell height and placed
+with the Kitty graphics protocol over the two rows the layout already reserved.
+The layout does not need to know which path was taken: a double-height line
+occupies two rows and half the columns either way. The bitmap is transparent
+behind the glyphs, so the terminal's own background keeps showing through.
+
+The font comes from `fc-match sans-serif:bold`, falling back to a short list of
+usual locations. If nothing is found, big headings are simply not offered.
 
 ### Clipboard
 
@@ -558,7 +565,7 @@ Key specs are a single character, a name such as `Esc`, `Space`, `Tab`,
 ### v1.0
 
 - [x] Key remapping through config
-- [ ] Rasterized heading fallback for non-DECDHL terminals
+- [x] Rasterized heading fallback for non-DECDHL terminals
 - [x] Release automation, binaries for macOS/Linux/Windows
 - [x] Documentation and man page (`mdroll --man > mdroll.1`)
 
