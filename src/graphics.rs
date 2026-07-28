@@ -13,7 +13,7 @@ use crate::bigtext;
 use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -114,6 +114,13 @@ pub fn fit(pixels: (u32, u32), cell: CellSize, max_cols: usize, max_rows: usize)
     (cols.round().max(1.0) as u16, rows.round().max(1.0) as u16)
 }
 
+/// Which cache a live kitty image id belongs to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Origin {
+    Image(usize),
+    Text(String),
+}
+
 #[derive(Debug)]
 struct Entry {
     kitty_id: u32,
@@ -130,6 +137,11 @@ pub struct ImageStore {
     uploaded: HashMap<usize, Entry>,
     /// Rasterized headings, keyed by their text, colour, and size.
     text: HashMap<String, u32>,
+    /// What each live kitty image id came from, so a dropped one can be
+    /// invalidated in the right cache.
+    origin: HashMap<u32, Origin>,
+    placed_now: HashSet<u32>,
+    placed_before: HashSet<u32>,
     /// Font renderer for big headings, absent when no usable font was found.
     pub big: Option<bigtext::Renderer>,
     next_id: u32,
@@ -147,6 +159,9 @@ impl ImageStore {
             sources: HashMap::new(),
             uploaded: HashMap::new(),
             text: HashMap::new(),
+            origin: HashMap::new(),
+            placed_now: HashSet::new(),
+            placed_before: HashSet::new(),
             big: None,
             next_id: 1,
         }
@@ -168,6 +183,49 @@ impl ImageStore {
     pub fn forget_all(&mut self) {
         self.sources.clear();
         self.uploaded.clear();
+    }
+
+    /// Start a frame. Nothing is emitted: placements are *replaced* in place as
+    /// the frame is drawn, and only the ones that turn out to be gone are
+    /// deleted at the end.
+    ///
+    /// This matters more than it looks. Deleting every placement up front
+    /// leaves each image with no placements referring to it, and the protocol
+    /// explicitly allows the terminal to free such data at any moment — which
+    /// kitty does, as soon as a later transmission needs the room. The heading
+    /// bitmap would then vanish the first time a diagram finished loading.
+    pub fn begin_frame(&mut self) {
+        std::mem::swap(&mut self.placed_before, &mut self.placed_now);
+        self.placed_now.clear();
+    }
+
+    /// Delete the placements that were on screen last frame and are not now.
+    ///
+    /// Their image data may be freed by the terminal once it has no
+    /// placements, so the upload is forgotten too and will be re-sent if the
+    /// image scrolls back into view.
+    pub fn end_frame<W: Write>(&mut self, out: &mut W) -> Result<()> {
+        if !self.protocol.available() {
+            return Ok(());
+        }
+        let gone: Vec<u32> = self
+            .placed_before
+            .difference(&self.placed_now)
+            .copied()
+            .collect();
+        for id in gone {
+            write!(out, "\x1b_Ga=d,d=i,i={id},p={id}\x1b\\")?;
+            match self.origin.remove(&id) {
+                Some(Origin::Image(image)) => {
+                    self.uploaded.remove(&image);
+                }
+                Some(Origin::Text(key)) => {
+                    self.text.remove(&key);
+                }
+                None => {}
+            }
+        }
+        Ok(())
     }
 
     /// Whether headings can be drawn as bitmaps on this terminal.
@@ -206,25 +264,21 @@ impl ImageStore {
                 transmit(out, id, &png)?;
                 if self.text.len() >= TEXT_CACHE_LIMIT {
                     self.text.clear();
+                    self.origin.retain(|_, o| !matches!(o, Origin::Text(_)));
                 }
+                self.origin.insert(id, Origin::Text(key.clone()));
                 self.text.insert(key, id);
                 id
             }
         };
+        // Placement id matches the image id, so re-placing replaces rather than
+        // stacking, and the image is never left with no placements at all.
         write!(
             out,
-            "\x1b_Ga=p,i={kitty_id},c={cols},r={rows},C=1,q=2\x1b\\"
+            "\x1b_Ga=p,i={kitty_id},p={kitty_id},c={cols},r={rows},C=1,q=2\x1b\\"
         )?;
+        self.placed_now.insert(kitty_id);
         Ok(true)
-    }
-
-    /// Delete every placement made by the previous frame.
-    pub fn clear_placements<W: Write>(&self, out: &mut W) -> Result<()> {
-        if self.protocol.available() {
-            // d=a deletes visible placements but keeps the uploaded images.
-            out.write_all(b"\x1b_Ga=d,d=a\x1b\\")?;
-        }
-        Ok(())
     }
 
     /// Place an image at the cursor's current position.
@@ -250,11 +304,14 @@ impl ImageStore {
         let y = skip_rows as u32 * self.cell.h as u32;
         let h = visible_rows as u32 * self.cell.h as u32;
         let w = cols as u32 * self.cell.w as u32;
+        // The placement id matches the image id, so re-placing replaces rather
+        // than adding, and the image is never left with zero placements.
         // C=1 keeps the cursor where it was, so the text layout is unaffected.
         write!(
             out,
-            "\x1b_Ga=p,i={kitty_id},c={cols},r={visible_rows},x=0,y={y},w={w},h={h},C=1,q=2\x1b\\"
+            "\x1b_Ga=p,i={kitty_id},p={kitty_id},c={cols},r={visible_rows},x=0,y={y},w={w},h={h},C=1,q=2\x1b\\"
         )?;
+        self.placed_now.insert(kitty_id);
         Ok(true)
     }
 
@@ -287,6 +344,7 @@ impl ImageStore {
         let kitty_id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1).max(1);
         transmit(out, kitty_id, &png)?;
+        self.origin.insert(kitty_id, Origin::Image(id));
         self.uploaded.insert(
             id,
             Entry {
@@ -376,17 +434,60 @@ mod tests {
     fn a_disabled_store_emits_nothing() {
         let mut store = ImageStore::disabled();
         let mut out = Vec::new();
-        store.clear_placements(&mut out).unwrap();
+        store.begin_frame();
         assert!(!store.place(&mut out, 0, 10, 5, 0, 5).unwrap());
+        store.end_frame(&mut out).unwrap();
         assert!(out.is_empty());
     }
 
     #[test]
-    fn clearing_placements_keeps_uploads() {
-        let store = ImageStore::new(Protocol::Kitty, CELL);
+    fn a_placement_that_stays_on_screen_is_never_deleted() {
+        let mut store = ImageStore::new(Protocol::Kitty, CELL);
+        store.uploaded.insert(
+            0,
+            Entry {
+                kitty_id: 9,
+                cols: 4,
+                rows: 2,
+            },
+        );
+        for _ in 0..3 {
+            let mut out = Vec::new();
+            store.begin_frame();
+            store.place(&mut out, 0, 4, 2, 0, 2).unwrap();
+            store.end_frame(&mut out).unwrap();
+            let text = String::from_utf8(out).unwrap();
+            assert!(text.contains("a=p,i=9,p=9"), "{text:?}");
+            assert!(!text.contains("a=d"), "still visible, so never deleted");
+        }
+    }
+
+    #[test]
+    fn a_placement_that_scrolls_away_is_deleted_and_forgotten() {
+        let mut store = ImageStore::new(Protocol::Kitty, CELL);
+        store.uploaded.insert(
+            0,
+            Entry {
+                kitty_id: 9,
+                cols: 4,
+                rows: 2,
+            },
+        );
+        store.origin.insert(9, Origin::Image(0));
+
         let mut out = Vec::new();
-        store.clear_placements(&mut out).unwrap();
-        assert_eq!(out, b"\x1b_Ga=d,d=a\x1b\\");
+        store.begin_frame();
+        store.place(&mut out, 0, 4, 2, 0, 2).unwrap();
+        store.end_frame(&mut out).unwrap();
+
+        let mut out = Vec::new();
+        store.begin_frame();
+        store.end_frame(&mut out).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("a=d,d=i,i=9,p=9"), "{text:?}");
+        // The terminal may free data with no placements, so the upload has to
+        // be forgotten or the next appearance would place a ghost.
+        assert!(!store.uploaded.contains_key(&0));
     }
 
     #[test]

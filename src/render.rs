@@ -7,11 +7,17 @@
 //! The order is fixed:
 //!
 //! ```text
-//! clear → draw content → MoveTo(0, status_row) → draw status
+//! draw every content row, padded → MoveTo(0, status_row) → draw status
 //! ```
 //!
 //! Because the bottom row is written last at an absolute position, a content
 //! region that miscounts by a row cannot hide it.
+//!
+//! Note what is *not* here: an erase-display up front. `ESC [ 2 J` deletes
+//! graphics along with the text in kitty, taking every already-transmitted
+//! image with it, so a heading bitmap would vanish on the second frame. Every
+//! row is padded out to the full width instead, which erases exactly as well
+//! and leaves the images alone.
 
 use crate::graphics::ImageStore;
 use crate::ir::{Color, Hit, HitTarget, Line, Link, Rect, Scale, Span, Style};
@@ -20,7 +26,6 @@ use crate::width::WidthCalc;
 use crate::wrap::slice_spans_columns;
 use anyhow::Result;
 use crossterm::style::{Attribute, SetAttribute, SetBackgroundColor, SetForegroundColor};
-use crossterm::terminal::{Clear, ClearType};
 use crossterm::{cursor::MoveTo, queue};
 use std::collections::HashSet;
 use std::io::Write;
@@ -130,10 +135,11 @@ impl Renderer {
         let mut placement = Placement::default();
 
         self.reset(out)?;
-        queue!(out, Clear(ClearType::All))?;
-        // Last frame's images are gone with the clear on some terminals and
-        // not on others; deleting the placements explicitly makes it uniform.
-        images.clear_placements(out)?;
+        // Autowrap stays off for the whole frame. Every row is padded to the
+        // full width, and with autowrap on, writing the last cell of a row
+        // leaves the terminal in a pending-wrap state.
+        out.write_all(DECAWM_OFF.as_bytes())?;
+        images.begin_frame();
 
         let mut placed: HashSet<usize> = HashSet::new();
         let mut y = 0u16;
@@ -158,27 +164,57 @@ impl Renderer {
             idx += 1;
         }
 
+        // Rows the document does not reach still have last frame's text on
+        // them, so they are blanked rather than left alone.
+        while y < view.rows {
+            self.blank_row(out, frame, y)?;
+            y += 1;
+        }
+
         // The status row is written last, at an absolute position, so it
         // survives any miscount above.
         queue!(out, MoveTo(0, frame.screen.status_row()))?;
-        out.write_all(DECAWM_OFF.as_bytes())?;
         if frame.double_height {
             out.write_all(DECSWL.as_bytes())?;
         }
         let bottom = slice_spans_columns(frame.bottom, 0, frame.screen.cols as usize, &self.calc);
         self.write_spans(out, &bottom, None)?;
         let used: usize = bottom.iter().map(|s| self.calc.str(&s.text)).sum();
-        if let Some(style) = bottom.last().map(|s| s.style) {
-            self.set_style(out, style)?;
-            let pad = (frame.screen.cols as usize).saturating_sub(used);
-            if pad > 0 {
-                out.write_all(" ".repeat(pad).as_bytes())?;
-            }
+        // The status line extends its own background across the row; an empty
+        // bottom row is simply blanked.
+        match bottom.last().map(|s| s.style) {
+            Some(style) => self.set_style(out, style)?,
+            None => self.reset(out)?,
         }
+        self.pad(out, used, frame.screen.cols as usize)?;
         self.reset(out)?;
         out.write_all(DECAWM_ON.as_bytes())?;
+        // Placements that did not come back this frame are retired last, so an
+        // image that is still on screen never spends a moment unreferenced.
+        images.end_frame(out)?;
         out.flush()?;
         Ok(placement)
+    }
+
+    /// Write spaces out to `width` columns.
+    fn pad<W: Write>(&self, out: &mut W, used: usize, width: usize) -> Result<()> {
+        let pad = width.saturating_sub(used);
+        if pad > 0 {
+            out.write_all(" ".repeat(pad).as_bytes())?;
+        }
+        Ok(())
+    }
+
+    /// Blank one row of the viewport.
+    fn blank_row<W: Write>(&self, out: &mut W, frame: &Frame<'_>, y: u16) -> Result<()> {
+        queue!(out, MoveTo(0, y))?;
+        if frame.double_height {
+            // A row that used to be double-height keeps the attribute until it
+            // is told otherwise.
+            out.write_all(DECSWL.as_bytes())?;
+        }
+        self.reset(out)?;
+        self.pad(out, 0, frame.screen.cols as usize)
     }
 
     /// Emit an SGR reset, unless colour is off entirely.
@@ -224,6 +260,9 @@ impl Renderer {
             .and_then(rgb_of)
             .unwrap_or((200, 200, 200));
 
+        for row in 0..2 {
+            self.blank_row(out, frame, y + row)?;
+        }
         queue!(out, MoveTo(0, y))?;
         if images.place_text(out, trimmed, color, cols, 2)? {
             return Ok(());
@@ -297,6 +336,11 @@ impl Renderer {
             }
             self.write_spans(out, &visible, Some(frame.links))?;
             self.reset(out)?;
+            // Pad to the full width instead of clearing the screen up front.
+            // ESC[2J deletes graphics along with the text in kitty, which took
+            // every already-transmitted image with it.
+            let used: usize = visible.iter().map(|s| self.calc.str(&s.text)).sum();
+            self.pad(out, used, cols)?;
         }
 
         for hit in &line.hits {
