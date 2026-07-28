@@ -156,11 +156,20 @@ impl<'t> Builder<'t> {
                     .next()
                     .filter(|s| !s.is_empty())
                     .map(str::to_string);
+                let literal = code.literal.trim_end_matches('\n');
+                let spans = lang
+                    .as_deref()
+                    .and_then(|lang| {
+                        crate::highlight::highlight(
+                            literal,
+                            lang,
+                            &self.theme.syntect_theme,
+                            self.theme.body(),
+                        )
+                    })
+                    .unwrap_or_else(|| vec![Span::new(literal.to_string(), self.theme.body())]);
                 let mut block = Block::new(BlockKind::Code { lang }, range);
-                block.spans = vec![Span::new(
-                    code.literal.trim_end_matches('\n').to_string(),
-                    self.theme.body(),
-                )];
+                block.spans = spans;
                 self.push(block);
             }
 

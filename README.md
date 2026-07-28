@@ -489,7 +489,7 @@ toggle_wrap = ["w"]
 ### v0.7 — Presentation
 
 - [x] Theme loading, bundled themes, `--theme` and `--list-themes`
-- [ ] syntect code block highlighting
+- [x] syntect code block highlighting
 - [x] Config file
 - [x] Persistent status line as an option
 
