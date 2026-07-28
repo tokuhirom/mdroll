@@ -1,0 +1,51 @@
+name = "gruvbox"
+foreground = "#ebdbb2"
+background = "#282828"
+
+[code]
+syntect_theme = "base16-eighties.dark"
+fence = { fg = "#665c54" }
+
+[heading]
+h1 = { fg = "#fabd2f", bold = true }
+h2 = { fg = "#b8bb26", bold = true }
+h3 = { fg = "#8ec07c", bold = true }
+h4 = { fg = "#83a598", bold = true }
+h5 = { fg = "#d3869b", bold = true }
+h6 = { fg = "#fe8019", bold = true }
+
+[inline]
+link = { fg = "#83a598", underline = true }
+code = { fg = "#d3869b", bg = "#3c3836" }
+emph = { fg = "#fabd2f", italic = true }
+strong = { fg = "#fe8019", bold = true }
+strikethrough = { fg = "#928374", strikethrough = true }
+footnote = { fg = "#928374" }
+
+[block]
+quote_bar = { fg = "#b8bb26" }
+quote = { fg = "#a89984", italic = true }
+rule = { fg = "#504945" }
+list_marker = { fg = "#fabd2f" }
+task_done = { fg = "#b8bb26" }
+task_todo = { fg = "#fe8019" }
+
+[table]
+border = { fg = "#665c54" }
+header = { fg = "#8ec07c", bold = true }
+
+[alert]
+note = { fg = "#83a598", bold = true }
+tip = { fg = "#b8bb26", bold = true }
+important = { fg = "#d3869b", bold = true }
+warning = { fg = "#fabd2f", bold = true }
+caution = { fg = "#fb4934", bold = true }
+
+[ui]
+status = { fg = "#ebdbb2", bg = "#504945" }
+toast = { fg = "#282828", bg = "#fabd2f", bold = true }
+cursor = { bg = "#3c3836" }
+search_match = { fg = "#282828", bg = "#fabd2f" }
+search_current = { fg = "#282828", bg = "#fe8019", bold = true }
+hint = { fg = "#282828", bg = "#b8bb26", bold = true }
+dim = { fg = "#928374" }

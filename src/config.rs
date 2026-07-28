@@ -1,0 +1,205 @@
+//! Configuration.
+//!
+//! Precedence is **command line → environment → config file → built-in
+//! default**. [`Settings`] is the resolved result; nothing downstream looks at
+//! the environment again.
+
+use crate::theme::DEFAULT_THEME;
+use crate::width::WidthCalc;
+use anyhow::{Context, Result};
+use serde::Deserialize;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+/// The config file. Every field is optional so an absent file and an empty file
+/// mean the same thing.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigFile {
+    pub theme: Option<String>,
+    pub default_mode: Option<String>,
+    pub default_wrap: Option<bool>,
+    pub width: Option<usize>,
+    pub status: Option<bool>,
+    pub double_height_headings: Option<bool>,
+    pub images: Option<bool>,
+    pub mouse: Option<bool>,
+    pub east_asian_ambiguous_wide: Option<bool>,
+    #[serde(default)]
+    pub keys: BTreeMap<String, Vec<String>>,
+}
+
+impl ConfigFile {
+    pub fn load(path: &Path) -> Result<ConfigFile> {
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("reading config {}", path.display()))?;
+        toml::from_str(&text).with_context(|| format!("parsing config {}", path.display()))
+    }
+}
+
+/// Default config path, `$XDG_CONFIG_HOME/mdroll/config.toml`.
+pub fn default_config_path() -> Option<PathBuf> {
+    dirs::config_dir().map(|d| d.join("mdroll").join("config.toml"))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Settings {
+    pub theme: String,
+    pub source: bool,
+    pub wrap: bool,
+    pub width: usize,
+    pub status: bool,
+    pub double_height: bool,
+    pub images: bool,
+    pub mouse: bool,
+    pub ambiguous_wide: bool,
+    pub no_color: bool,
+    pub keys: BTreeMap<String, Vec<String>>,
+}
+
+impl Default for Settings {
+    fn default() -> Settings {
+        Settings {
+            theme: DEFAULT_THEME.into(),
+            source: false,
+            wrap: true,
+            width: 0,
+            status: false,
+            double_height: true,
+            images: true,
+            mouse: false,
+            ambiguous_wide: false,
+            no_color: false,
+            keys: BTreeMap::new(),
+        }
+    }
+}
+
+impl Settings {
+    pub fn calc(&self) -> WidthCalc {
+        WidthCalc::new(self.ambiguous_wide)
+    }
+
+    /// Apply a config file over the built-in defaults.
+    pub fn apply_file(&mut self, file: &ConfigFile) {
+        if let Some(v) = &file.theme {
+            self.theme = v.clone();
+        }
+        if let Some(v) = &file.default_mode {
+            self.source = v.eq_ignore_ascii_case("source");
+        }
+        if let Some(v) = file.default_wrap {
+            self.wrap = v;
+        }
+        if let Some(v) = file.width {
+            self.width = v;
+        }
+        if let Some(v) = file.status {
+            self.status = v;
+        }
+        if let Some(v) = file.double_height_headings {
+            self.double_height = v;
+        }
+        if let Some(v) = file.images {
+            self.images = v;
+        }
+        if let Some(v) = file.mouse {
+            self.mouse = v;
+        }
+        if let Some(v) = file.east_asian_ambiguous_wide {
+            self.ambiguous_wide = v;
+        }
+        if !file.keys.is_empty() {
+            self.keys = file.keys.clone();
+        }
+    }
+
+    /// Apply environment variables over the config file.
+    pub fn apply_env(&mut self, env: &dyn Fn(&str) -> Option<String>) {
+        if let Some(theme) = env("MDROLL_THEME") {
+            self.theme = theme;
+        }
+        // NO_COLOR is honoured whatever its value, per the convention.
+        if env("NO_COLOR").is_some() {
+            self.no_color = true;
+        }
+    }
+}
+
+/// Look up an environment variable, treating empty as unset.
+pub fn env_var(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|v| !v.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_empty_config_leaves_the_defaults_alone() {
+        let file: ConfigFile = toml::from_str("").unwrap();
+        let mut settings = Settings::default();
+        settings.apply_file(&file);
+        assert_eq!(settings, Settings::default());
+    }
+
+    #[test]
+    fn the_config_file_overrides_defaults() {
+        let file: ConfigFile = toml::from_str(
+            r#"
+            theme = "dracula"
+            default_mode = "source"
+            default_wrap = false
+            width = 100
+            status = true
+            east_asian_ambiguous_wide = true
+            "#,
+        )
+        .unwrap();
+        let mut settings = Settings::default();
+        settings.apply_file(&file);
+        assert_eq!(settings.theme, "dracula");
+        assert!(settings.source);
+        assert!(!settings.wrap);
+        assert_eq!(settings.width, 100);
+        assert!(settings.status);
+        assert!(settings.calc().ambiguous_wide);
+    }
+
+    #[test]
+    fn the_environment_overrides_the_config_file() {
+        let file: ConfigFile = toml::from_str(r#"theme = "nord""#).unwrap();
+        let mut settings = Settings::default();
+        settings.apply_file(&file);
+        settings.apply_env(&|name| match name {
+            "MDROLL_THEME" => Some("gruvbox".into()),
+            _ => None,
+        });
+        assert_eq!(settings.theme, "gruvbox");
+    }
+
+    #[test]
+    fn no_color_is_honoured_even_when_empty_is_not() {
+        let mut settings = Settings::default();
+        settings.apply_env(&|name| (name == "NO_COLOR").then(|| "1".to_string()));
+        assert!(settings.no_color);
+    }
+
+    #[test]
+    fn unknown_config_keys_are_an_error_rather_than_a_silent_typo() {
+        assert!(toml::from_str::<ConfigFile>("thmee = \"dracula\"").is_err());
+    }
+
+    #[test]
+    fn key_overrides_are_read_as_lists() {
+        let file: ConfigFile = toml::from_str(
+            r#"
+            [keys]
+            quit = ["q", "Esc"]
+            toggle_wrap = ["w"]
+            "#,
+        )
+        .unwrap();
+        assert_eq!(file.keys["quit"], vec!["q", "Esc"]);
+    }
+}

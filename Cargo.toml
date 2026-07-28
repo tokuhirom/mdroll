@@ -1,0 +1,32 @@
+[package]
+name = "mdroll"
+version = "0.1.0"
+edition = "2024"
+description = "A terminal Markdown viewer that takes Japanese text seriously"
+license = "MIT"
+repository = "https://github.com/tokuhirom/mdroll"
+readme = "README.md"
+keywords = ["markdown", "terminal", "viewer", "cjk", "tui"]
+categories = ["command-line-utilities", "text-processing"]
+
+[dependencies]
+anyhow = "1.0.104"
+arboard = { version = "3.6.1", default-features = false }
+base64 = "0.23.0"
+clap = { version = "4.6.4", features = ["derive"] }
+comrak = { version = "0.54.0", default-features = false }
+crossterm = "0.29.0"
+dirs = "6.0.0"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
+serde = { version = "1.0.229", features = ["derive"] }
+syntect = { version = "5.3.0", default-features = false, features = [
+    "default-fancy",
+] }
+toml = "1.1.4"
+unicode-linebreak = "0.1.5"
+unicode-width = "0.2.2"
+
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1

@@ -1,0 +1,55 @@
+# The default theme.
+#
+# Sets no background color at all, so the terminal's own palette, transparency,
+# and background image all keep working. Only ANSI color names are used, never
+# RGB, so it looks right whatever palette the terminal is configured with.
+
+name = "terminal"
+
+[code]
+syntect_theme = "base16-ocean.dark"
+fence = { fg = "brightblack" }
+
+[heading]
+h1 = { fg = "brightmagenta", bold = true }
+h2 = { fg = "brightcyan", bold = true }
+h3 = { fg = "brightgreen", bold = true }
+h4 = { fg = "brightyellow", bold = true }
+h5 = { fg = "brightblue", bold = true }
+h6 = { fg = "cyan", bold = true }
+
+[inline]
+link = { fg = "brightblue", underline = true }
+code = { fg = "brightmagenta" }
+emph = { italic = true }
+strong = { bold = true }
+strikethrough = { strikethrough = true, dim = true }
+footnote = { fg = "brightblack" }
+
+[block]
+quote_bar = { fg = "brightblack" }
+quote = { italic = true, dim = true }
+rule = { fg = "brightblack" }
+list_marker = { fg = "brightcyan" }
+task_done = { fg = "brightgreen" }
+task_todo = { fg = "brightyellow" }
+
+[table]
+border = { fg = "brightblack" }
+header = { bold = true, fg = "brightcyan" }
+
+[alert]
+note = { fg = "brightblue", bold = true }
+tip = { fg = "brightgreen", bold = true }
+important = { fg = "brightmagenta", bold = true }
+warning = { fg = "brightyellow", bold = true }
+caution = { fg = "brightred", bold = true }
+
+[ui]
+status = { reverse = true }
+toast = { reverse = true }
+cursor = { reverse = true }
+search_match = { fg = "black", bg = "brightyellow" }
+search_current = { fg = "black", bg = "brightred", bold = true }
+hint = { fg = "black", bg = "brightgreen", bold = true }
+dim = { dim = true }

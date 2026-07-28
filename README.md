@@ -1,10 +1,12 @@
 # mdroll
 
-A terminal Markdown viewer that takes Japanese text seriously.
+A terminal Markdown viewer with big headings and real GitHub Flavored Markdown
+support.
 
-`mdroll` renders Markdown in the terminal with correct CJK line breaking, a
+`mdroll` renders Markdown in the terminal the way GitHub does — tables, task
+lists, footnotes, alerts, and mermaid diagrams included — with a
 horizontal-scroll mode for when you don't want reflow, and a source view you can
-toggle into at any time. Headings are actually *big* — not just a different
+toggle into at any time. Headings are actually *big*, not just a different
 color.
 
 The name is `md` + *roll*, after 絵巻 (emaki), the horizontal picture scrolls you
@@ -19,9 +21,9 @@ Existing terminal Markdown viewers are good, but three things kept coming up:
 1. **Headings never look like headings.** Every viewer renders `# Title` in a
    color or a background bar. None of them make the text larger, so document
    structure is hard to scan.
-2. **Japanese line breaking is wrong.** Most renderers wrap on whitespace, which
-   is meaningless for Japanese. Lines break mid-word, and 禁則処理 (kinsoku —
-   the rules that stop `。` or `）` from starting a line) is absent.
+2. **GitHub's Markdown is the Markdown people actually write.** Task lists,
+   footnotes, `> [!NOTE]` alerts, and mermaid diagrams appear in every README,
+   and most viewers render them as raw text or drop them entirely.
 3. **You can't get the text back out.** Once content is rendered, copying the
    original Markdown means opening the file in an editor.
 
@@ -33,13 +35,17 @@ gracefully rather than being the design center.
 
 ## Features
 
+- **Full GitHub Flavored Markdown** — tables, task lists, strikethrough,
+  autolinks, footnotes, and `> [!NOTE]` alerts.
+- **Mermaid diagrams** rendered inline, as box drawings on any terminal and as
+  images where graphics are available.
 - **Two rendering modes** — rendered view, and raw source view showing `#`,
   `**`, and friends as written.
 - **Two layout modes** — reflow to terminal width, or no-wrap with horizontal
   scrolling.
-- **Real Japanese line breaking** via UAX #14, with kinsoku rules applied.
 - **Double-height headings** using DECDHL, so `# Title` renders at twice the
   size on terminals that support it.
+- **Correct CJK line breaking** via UAX #14, with kinsoku rules applied.
 - **Block yank** — move a cursor over blocks and copy either the original
   Markdown source or the rendered plain text. Works over SSH via OSC 52.
 - **Clickable links** via OSC 8 hyperlinks, with no mouse capture required, so
@@ -267,9 +273,9 @@ treat_east_asian_ambiguous_width_as_wide = true
 ```
 
 Line breaking uses `unicode-linebreak` (UAX #14) plus kinsoku adjustments: no
-line may begin with `。、）」』ー` and none may end with `「（『`. This is the
-single largest quality difference from whitespace-based wrapping, and the main
-reason this project exists.
+line may begin with `。、）」』ー` and none may end with `「（『`. Text without
+spaces has to break somewhere, and these rules are what keep the result from
+looking wrong.
 
 ### Horizontal scrolling
 
@@ -398,60 +404,74 @@ toggle_wrap = ["w"]
 
 ### v0.1 — Walking skeleton
 
-- [ ] comrak parsing into `Vec<Block>` with `source_range`
-- [ ] Pure `layout()` with reflow
-- [ ] Vertical scrolling, `Screen`/`Viewport` split
-- [ ] Absolute-position bottom row, DECAWM handling
-- [ ] Toast on mode change
-- [ ] Headings, paragraphs, lists, blockquotes, code blocks (no highlighting)
+- [x] comrak parsing into `Vec<Block>` with `source_range`
+- [x] Pure `layout()` with reflow
+- [x] Vertical scrolling, `Screen`/`Viewport` split
+- [x] Absolute-position bottom row, DECAWM handling
+- [x] Toast on mode change
+- [x] Headings, paragraphs, lists, blockquotes, code blocks (no highlighting)
 
 ### v0.2 — Modes
 
-- [ ] Source view toggle
-- [ ] No-wrap mode with horizontal scrolling
-- [ ] Auto no-wrap when entering source view, restore on exit
-- [ ] Full-width character handling at slice boundaries
+- [x] Source view toggle
+- [x] No-wrap mode with horizontal scrolling
+- [x] Auto no-wrap when entering source view, restore on exit
+- [x] Full-width character handling at slice boundaries
 
-### v0.3 — Japanese quality
+### v0.3 — GitHub Flavored Markdown
 
-- [ ] UAX #14 line breaking
-- [ ] Kinsoku rules
-- [ ] Configurable East Asian Ambiguous width
-- [ ] Table rendering with correct CJK column widths
+- [x] Tables, with column widths measured in display columns
+- [x] Task lists and strikethrough
+- [x] Autolinks
+- [x] Footnotes, with a references section at the end
+- [x] `> [!NOTE]` / `[!TIP]` / `[!IMPORTANT]` / `[!WARNING]` / `[!CAUTION]` alerts
 
-### v0.4 — Links
+### v0.4 — Text quality
 
-- [ ] OSC 8 hyperlink emission
-- [ ] Link picker (`F`)
-- [ ] Open under cursor (`o`)
+- [x] UAX #14 line breaking
+- [x] Kinsoku rules
+- [x] Configurable East Asian Ambiguous width
 
-### v0.5 — Copying
+### v0.5 — Links
 
-- [ ] Block cursor (`Tab` / `Shift-Tab`)
-- [ ] `y` / `Y` / `yc` / `yp`
-- [ ] Line selection mode (`V`)
-- [ ] `arboard` with OSC 52 fallback
+- [x] OSC 8 hyperlink emission
+- [x] Link picker (`F`)
+- [x] Open under cursor (`o`)
 
-### v0.6 — Presentation
+### v0.6 — Copying
 
-- [ ] Theme loading, bundled themes, `--theme` and `--list-themes`
+- [x] Block cursor (`Tab` / `Shift-Tab`)
+- [x] `y` / `Y` / `yc` / `yp`
+- [x] Line selection mode (`V`)
+- [x] `arboard` with OSC 52 fallback
+
+### v0.7 — Presentation
+
+- [x] Theme loading, bundled themes, `--theme` and `--list-themes`
 - [ ] syntect code block highlighting
-- [ ] Config file
-- [ ] Persistent status line as an option
+- [x] Config file
+- [x] Persistent status line as an option
 
-### v0.7 — Big headings
+### v0.8 — Big headings
 
-- [ ] DECDHL double-height headings
+- [x] DECDHL double-height headings
 - [ ] Capability detection and graceful fallback
-- [ ] Layout accounting for halved column count and doubled row cost
+- [x] Layout accounting for halved column count and doubled row cost
 
-### v0.8 — Finding things
+### v0.9 — Mermaid
 
-- [ ] Incremental search with `/`, `?`, `n`, `N`
+- [ ] `flowchart` / `graph` rendered with box drawings, laid out by rank
+- [ ] `sequenceDiagram` rendered with lifelines and arrows
+- [ ] Image rendering through `mmdc` where the terminal has graphics
+- [ ] Fall back to a highlighted code block for unsupported diagram types
+
+### v0.10 — Finding things
+
+- [x] Incremental search with `/`, `?`, `n`, `N`
 - [ ] Section breadcrumb in the header region
 - [ ] Table of contents pane
 
-### v0.9 — Images and files
+### v0.11 — Images and files
 
 - [ ] Inline images via the Kitty graphics protocol
 - [ ] Optional mouse capture (`--mouse`) with rectangle hit-testing
@@ -467,9 +487,8 @@ toggle_wrap = ["w"]
 
 ### Beyond
 
-- Mermaid diagram rendering
-- Footnotes and definition lists
-- Vertical writing mode (縦書き) as an experiment
+- Math via `$...$` and `$$...$$`
+- Definition lists
 - Use as a library, for embedding in other TUIs
 
 ---
@@ -490,8 +509,8 @@ toggle_wrap = ["w"]
 `mdroll` owes ideas to [glow](https://github.com/charmbracelet/glow),
 [mdcat](https://github.com/swsnr/mdcat), and
 [md-tui](https://github.com/henriklovhaug/md-tui). Each solves a different part
-of this problem well; none of them targets Japanese typography or in-viewer
-copying, which is the gap this fills.
+of this problem well; none of them combines large headings, mermaid rendering,
+and in-viewer copying, which is the gap this fills.
 
 ---
 

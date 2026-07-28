@@ -1,0 +1,51 @@
+name = "dracula"
+foreground = "#f8f8f2"
+background = "#282a36"
+
+[code]
+syntect_theme = "Dracula"
+fence = { fg = "#6272a4" }
+
+[heading]
+h1 = { fg = "#bd93f9", bold = true }
+h2 = { fg = "#8be9fd", bold = true }
+h3 = { fg = "#50fa7b", bold = true }
+h4 = { fg = "#f1fa8c", bold = true }
+h5 = { fg = "#ffb86c", bold = true }
+h6 = { fg = "#ff79c6", bold = true }
+
+[inline]
+link = { fg = "#8be9fd", underline = true }
+code = { fg = "#ff79c6", bg = "#44475a" }
+emph = { fg = "#f1fa8c", italic = true }
+strong = { fg = "#ffb86c", bold = true }
+strikethrough = { fg = "#6272a4", strikethrough = true }
+footnote = { fg = "#6272a4" }
+
+[block]
+quote_bar = { fg = "#bd93f9" }
+quote = { fg = "#6272a4", italic = true }
+rule = { fg = "#44475a" }
+list_marker = { fg = "#bd93f9" }
+task_done = { fg = "#50fa7b" }
+task_todo = { fg = "#ffb86c" }
+
+[table]
+border = { fg = "#6272a4" }
+header = { fg = "#8be9fd", bold = true }
+
+[alert]
+note = { fg = "#8be9fd", bold = true }
+tip = { fg = "#50fa7b", bold = true }
+important = { fg = "#bd93f9", bold = true }
+warning = { fg = "#f1fa8c", bold = true }
+caution = { fg = "#ff5555", bold = true }
+
+[ui]
+status = { fg = "#f8f8f2", bg = "#44475a" }
+toast = { fg = "#282a36", bg = "#bd93f9", bold = true }
+cursor = { bg = "#44475a" }
+search_match = { fg = "#282a36", bg = "#f1fa8c" }
+search_current = { fg = "#282a36", bg = "#ff79c6", bold = true }
+hint = { fg = "#282a36", bg = "#50fa7b", bold = true }
+dim = { fg = "#6272a4" }

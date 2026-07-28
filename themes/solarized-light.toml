@@ -1,0 +1,51 @@
+name = "solarized-light"
+foreground = "#657b83"
+background = "#fdf6e3"
+
+[code]
+syntect_theme = "Solarized (light)"
+fence = { fg = "#93a1a1" }
+
+[heading]
+h1 = { fg = "#268bd2", bold = true }
+h2 = { fg = "#2aa198", bold = true }
+h3 = { fg = "#859900", bold = true }
+h4 = { fg = "#b58900", bold = true }
+h5 = { fg = "#cb4b16", bold = true }
+h6 = { fg = "#d33682", bold = true }
+
+[inline]
+link = { fg = "#268bd2", underline = true }
+code = { fg = "#d33682", bg = "#eee8d5" }
+emph = { fg = "#b58900", italic = true }
+strong = { fg = "#cb4b16", bold = true }
+strikethrough = { fg = "#93a1a1", strikethrough = true }
+footnote = { fg = "#93a1a1" }
+
+[block]
+quote_bar = { fg = "#268bd2" }
+quote = { fg = "#839496", italic = true }
+rule = { fg = "#eee8d5" }
+list_marker = { fg = "#2aa198" }
+task_done = { fg = "#859900" }
+task_todo = { fg = "#b58900" }
+
+[table]
+border = { fg = "#93a1a1" }
+header = { fg = "#2aa198", bold = true }
+
+[alert]
+note = { fg = "#268bd2", bold = true }
+tip = { fg = "#859900", bold = true }
+important = { fg = "#6c71c4", bold = true }
+warning = { fg = "#b58900", bold = true }
+caution = { fg = "#dc322f", bold = true }
+
+[ui]
+status = { fg = "#586e75", bg = "#eee8d5" }
+toast = { fg = "#fdf6e3", bg = "#268bd2", bold = true }
+cursor = { bg = "#eee8d5" }
+search_match = { fg = "#fdf6e3", bg = "#b58900" }
+search_current = { fg = "#fdf6e3", bg = "#cb4b16", bold = true }
+hint = { fg = "#fdf6e3", bg = "#859900", bold = true }
+dim = { fg = "#93a1a1" }

@@ -1,0 +1,51 @@
+name = "nord"
+foreground = "#d8dee9"
+background = "#2e3440"
+
+[code]
+syntect_theme = "base16-ocean.dark"
+fence = { fg = "#4c566a" }
+
+[heading]
+h1 = { fg = "#88c0d0", bold = true }
+h2 = { fg = "#81a1c1", bold = true }
+h3 = { fg = "#8fbcbb", bold = true }
+h4 = { fg = "#a3be8c", bold = true }
+h5 = { fg = "#ebcb8b", bold = true }
+h6 = { fg = "#b48ead", bold = true }
+
+[inline]
+link = { fg = "#88c0d0", underline = true }
+code = { fg = "#b48ead", bg = "#3b4252" }
+emph = { fg = "#ebcb8b", italic = true }
+strong = { fg = "#d08770", bold = true }
+strikethrough = { fg = "#4c566a", strikethrough = true }
+footnote = { fg = "#4c566a" }
+
+[block]
+quote_bar = { fg = "#81a1c1" }
+quote = { fg = "#7b88a1", italic = true }
+rule = { fg = "#434c5e" }
+list_marker = { fg = "#81a1c1" }
+task_done = { fg = "#a3be8c" }
+task_todo = { fg = "#ebcb8b" }
+
+[table]
+border = { fg = "#4c566a" }
+header = { fg = "#88c0d0", bold = true }
+
+[alert]
+note = { fg = "#81a1c1", bold = true }
+tip = { fg = "#a3be8c", bold = true }
+important = { fg = "#b48ead", bold = true }
+warning = { fg = "#ebcb8b", bold = true }
+caution = { fg = "#bf616a", bold = true }
+
+[ui]
+status = { fg = "#eceff4", bg = "#434c5e" }
+toast = { fg = "#2e3440", bg = "#88c0d0", bold = true }
+cursor = { bg = "#3b4252" }
+search_match = { fg = "#2e3440", bg = "#ebcb8b" }
+search_current = { fg = "#2e3440", bg = "#d08770", bold = true }
+hint = { fg = "#2e3440", bg = "#a3be8c", bold = true }
+dim = { fg = "#4c566a" }
