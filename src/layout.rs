@@ -7,6 +7,7 @@
 
 use crate::graphics::{self, CellSize};
 use crate::ir::*;
+use crate::mermaid;
 use crate::screen::Viewport;
 use crate::theme::Theme;
 use crate::width::WidthCalc;
@@ -281,7 +282,57 @@ impl<'a> Ctx<'a> {
         self.push(Line::new(block.source_range.start, idx, spans));
     }
 
+    /// Render a ```mermaid block as a diagram, or `false` if it cannot be.
+    ///
+    /// A diagram is drawn at its intrinsic size; if that does not fit the
+    /// available columns there is nothing sensible to reflow, so the block
+    /// falls back to being shown as source.
+    fn mermaid(&mut self, idx: usize, block: &Block) -> bool {
+        let BlockKind::Code { lang: Some(lang) } = &block.kind else {
+            return false;
+        };
+        if !lang.eq_ignore_ascii_case("mermaid") {
+            return false;
+        }
+        let Some(rows) = mermaid::render(&block.text(), self.calc()) else {
+            return false;
+        };
+        let width = self.content_width(block, Scale::Normal);
+        if rows.iter().any(|r| self.calc().str(r) > width) {
+            return false;
+        }
+
+        let source = block.source_range.start;
+        for (i, row) in rows.iter().enumerate() {
+            let mut spans = self.lead_spans(block, i == 0);
+            spans.extend(self.diagram_spans(row));
+            self.push(Line::new(source, idx, spans));
+        }
+        true
+    }
+
+    /// Split a diagram row so the rules are drawn in the border colour and the
+    /// labels in the body colour.
+    fn diagram_spans(&self, row: &str) -> Vec<Span> {
+        let mut out: Vec<Span> = Vec::new();
+        for c in row.chars() {
+            let style = if is_box_drawing(c) {
+                self.theme.table_border
+            } else {
+                self.theme.body()
+            };
+            match out.last_mut() {
+                Some(last) if last.style == style => last.text.push(c),
+                _ => out.push(Span::new(c.to_string(), style)),
+            }
+        }
+        out
+    }
+
     fn code(&mut self, idx: usize, block: &Block) {
+        if self.mermaid(idx, block) {
+            return;
+        }
         // Fenced blocks have their opening fence on the first source line;
         // indented blocks start immediately.
         let fenced = self
@@ -567,6 +618,12 @@ impl<'a> Ctx<'a> {
         }
         owner
     }
+}
+
+/// Box-drawing, block, and arrow characters, which diagrams paint in the
+/// border colour rather than the body colour.
+fn is_box_drawing(c: char) -> bool {
+    matches!(c, '\u{2500}'..='\u{257f}' | '\u{2580}'..='\u{259f}' | '▲' | '▶' | '▼' | '◀' | '◇')
 }
 
 /// The layout row that best matches a source line. Used to preserve reading
@@ -895,6 +952,30 @@ mod tests {
         let lines = layout(&doc, Viewport::new(80, 24), &Options::default(), &theme);
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].text(), "a picture");
+    }
+
+    #[test]
+    fn a_mermaid_block_is_drawn_as_a_diagram() {
+        let out = wrapped("```mermaid\nflowchart TD\n  A[one] --> B[two]\n```\n", 60);
+        let text = out.join("\n");
+        assert!(text.contains('┌') && text.contains('▼'), "{text}");
+        assert!(
+            !text.contains("flowchart"),
+            "the source should not be shown"
+        );
+    }
+
+    #[test]
+    fn an_unsupported_mermaid_diagram_falls_back_to_source() {
+        let out = wrapped("```mermaid\npie title Pets\n  \"Dogs\" : 42\n```\n", 60);
+        assert!(out.iter().any(|l| l.contains("pie title Pets")), "{out:#?}");
+    }
+
+    #[test]
+    fn a_diagram_too_wide_for_the_viewport_falls_back_to_source() {
+        let src = "```mermaid\nflowchart LR\n  A[a really quite long label] --> B[another long one]\n```\n";
+        let out = wrapped(src, 30);
+        assert!(out.iter().any(|l| l.contains("flowchart LR")), "{out:#?}");
     }
 
     #[test]

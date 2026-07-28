@@ -37,8 +37,8 @@ gracefully rather than being the design center.
 
 - **Full GitHub Flavored Markdown** — tables, task lists, strikethrough,
   autolinks, footnotes, and `> [!NOTE]` alerts.
-- **Mermaid diagrams** rendered inline, as box drawings on any terminal and as
-  images where graphics are available.
+- **Mermaid diagrams** — `flowchart` and `sequenceDiagram` drawn with box
+  characters, laid out by rank. Anything unsupported falls back to source.
 - **Two rendering modes** — rendered view, and raw source view showing `#`,
   `**`, and friends as written.
 - **Two layout modes** — reflow to terminal width, or no-wrap with horizontal
@@ -511,10 +511,10 @@ toggle_wrap = ["w"]
 
 ### v0.9 — Mermaid
 
-- [ ] `flowchart` / `graph` rendered with box drawings, laid out by rank
-- [ ] `sequenceDiagram` rendered with lifelines and arrows
+- [x] `flowchart` / `graph` rendered with box drawings, laid out by rank
+- [x] `sequenceDiagram` rendered with lifelines and arrows
+- [x] Fall back to a highlighted code block for unsupported diagram types
 - [ ] Image rendering through `mmdc` where the terminal has graphics
-- [ ] Fall back to a highlighted code block for unsupported diagram types
 
 ### v0.10 — Finding things
 

@@ -1,0 +1,1114 @@
+//! Mermaid diagrams, drawn with box-drawing characters.
+//!
+//! Supports `flowchart` / `graph` and `sequenceDiagram`, which is what appears
+//! in practically every README. Anything else — and anything using a construct
+//! this does not model, such as `subgraph` — is declined, and the caller falls
+//! back to rendering the fenced block as highlighted code. Declining is always
+//! better than drawing something subtly wrong.
+//!
+//! Everything is composed onto a grid of display *columns*, not characters, so
+//! a CJK node label reserves the two columns it actually occupies.
+
+use crate::width::WidthCalc;
+
+/// Columns between adjacent boxes on the same rank.
+const GAP: usize = 3;
+/// Rows in the connector band between two ranks.
+const BAND: usize = 3;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    TopDown,
+    LeftRight,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Shape {
+    Rect,
+    Round,
+    Diamond,
+    Stadium,
+}
+
+#[derive(Debug, Clone)]
+pub struct Node {
+    pub id: String,
+    pub label: String,
+    pub shape: Shape,
+}
+
+#[derive(Debug, Clone)]
+pub struct Edge {
+    pub from: usize,
+    pub to: usize,
+    pub label: Option<String>,
+    pub dotted: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct Flowchart {
+    pub direction: Direction,
+    pub nodes: Vec<Node>,
+    pub edges: Vec<Edge>,
+}
+
+/// Render a mermaid diagram, or return `None` if it uses anything unsupported.
+pub fn render(code: &str, calc: &WidthCalc) -> Option<Vec<String>> {
+    let kind = code
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty() && !l.starts_with("%%"))?;
+
+    if kind.starts_with("sequenceDiagram") {
+        return sequence::render(code, calc);
+    }
+    if kind.starts_with("flowchart") || kind.starts_with("graph") {
+        let chart = parse_flowchart(code)?;
+        return draw_flowchart(&chart, calc);
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
+// A column grid
+// ---------------------------------------------------------------------------
+
+/// A canvas addressed in display columns.
+///
+/// A double-width character occupies its own cell plus a following
+/// [`Cell::Skip`], so column arithmetic stays honest for CJK labels and for
+/// box-drawing characters on terminals that treat East Asian Ambiguous as wide.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Cell {
+    Blank,
+    Skip,
+    Char(char),
+}
+
+struct Grid {
+    cells: Vec<Vec<Cell>>,
+    width: usize,
+}
+
+impl Grid {
+    fn new(width: usize, height: usize) -> Grid {
+        Grid {
+            cells: vec![vec![Cell::Blank; width]; height],
+            width,
+        }
+    }
+
+    fn put(&mut self, x: usize, y: usize, c: char, calc: &WidthCalc) {
+        let w = calc.ch(c).max(1);
+        if y >= self.cells.len() || x + w > self.width {
+            return;
+        }
+        self.cells[y][x] = Cell::Char(c);
+        for i in 1..w {
+            self.cells[y][x + i] = Cell::Skip;
+        }
+    }
+
+    fn text(&mut self, x: usize, y: usize, s: &str, calc: &WidthCalc) {
+        let mut col = x;
+        for c in s.chars() {
+            self.put(col, y, c, calc);
+            col += calc.ch(c).max(1);
+        }
+    }
+
+    /// Draw a character only where the cell is still blank, so a crossing line
+    /// never punches a hole through a box.
+    fn put_soft(&mut self, x: usize, y: usize, c: char, calc: &WidthCalc) {
+        if y < self.cells.len() && x < self.width && self.cells[y][x] == Cell::Blank {
+            self.put(x, y, c, calc);
+        }
+    }
+
+    fn hline(&mut self, x0: usize, x1: usize, y: usize, calc: &WidthCalc) {
+        for x in x0.min(x1)..=x0.max(x1) {
+            self.put_soft(x, y, '─', calc);
+        }
+    }
+
+    fn vline(&mut self, x: usize, y0: usize, y1: usize, calc: &WidthCalc) {
+        for y in y0.min(y1)..=y0.max(y1) {
+            self.put_soft(x, y, '│', calc);
+        }
+    }
+
+    fn rows(self) -> Vec<String> {
+        self.cells
+            .into_iter()
+            .map(|row| {
+                let mut s = String::new();
+                for cell in row {
+                    match cell {
+                        Cell::Char(c) => s.push(c),
+                        Cell::Blank => s.push(' '),
+                        Cell::Skip => {}
+                    }
+                }
+                s.trim_end().to_string()
+            })
+            .collect()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Flowchart parsing
+// ---------------------------------------------------------------------------
+
+/// Edge operators, longest first so `-.->` is not read as `-.-`.
+const OPERATORS: &[(&str, bool)] = &[
+    ("-.->", true),
+    ("-.-", true),
+    ("==>", false),
+    ("===", false),
+    ("-->", false),
+    ("---", false),
+    ("--x", false),
+    ("--o", false),
+];
+
+pub fn parse_flowchart(code: &str) -> Option<Flowchart> {
+    let mut lines = code
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with("%%"));
+
+    let header = lines.next()?;
+    let direction = match header.split_whitespace().nth(1).unwrap_or("TD") {
+        "LR" | "RL" => Direction::LeftRight,
+        _ => Direction::TopDown,
+    };
+    let reversed = matches!(
+        header.split_whitespace().nth(1).unwrap_or("TD"),
+        "RL" | "BT"
+    );
+
+    let mut chart = Flowchart {
+        direction,
+        nodes: Vec::new(),
+        edges: Vec::new(),
+    };
+
+    for line in lines {
+        // Anything that changes the *shape* of the diagram, rather than its
+        // styling, is a reason to decline the whole thing.
+        if line.starts_with("subgraph") || line.starts_with("end") {
+            return None;
+        }
+        if line.starts_with("classDef")
+            || line.starts_with("class ")
+            || line.starts_with("style ")
+            || line.starts_with("click ")
+            || line.starts_with("linkStyle")
+        {
+            continue;
+        }
+        parse_statement(line, &mut chart)?;
+    }
+
+    if chart.nodes.is_empty() {
+        return None;
+    }
+    if reversed {
+        for edge in &mut chart.edges {
+            std::mem::swap(&mut edge.from, &mut edge.to);
+        }
+    }
+    Some(chart)
+}
+
+/// One statement: a chain of node specs joined by edge operators.
+fn parse_statement(line: &str, chart: &mut Flowchart) -> Option<()> {
+    let mut parts: Vec<(String, Option<String>, bool)> = Vec::new();
+    let mut rest = line;
+    let mut pending_label: Option<String> = None;
+    let mut pending_dotted = false;
+    let mut first = true;
+
+    loop {
+        match find_operator(rest) {
+            Some((start, len, dotted)) => {
+                let (spec, after) = rest.split_at(start);
+                // `A -- label --> B` writes the label before the arrow.
+                let (spec, inline_label) = split_trailing_label(spec);
+                parts.push((
+                    spec.trim().to_string(),
+                    pending_label.take(),
+                    pending_dotted,
+                ));
+                let after = &after[len..];
+                // `A -->|label| B` writes it after.
+                let (label, after) = leading_pipe_label(after);
+                pending_label = label.or(inline_label);
+                pending_dotted = dotted;
+                rest = after;
+                first = false;
+            }
+            None => {
+                parts.push((
+                    rest.trim().to_string(),
+                    pending_label.take(),
+                    pending_dotted,
+                ));
+                break;
+            }
+        }
+    }
+
+    if first && parts.len() == 1 {
+        // A bare node declaration such as `A[Label]`.
+        let (spec, _) = &(parts[0].0.clone(), ());
+        if spec.is_empty() {
+            return Some(());
+        }
+        intern(chart, spec)?;
+        return Some(());
+    }
+
+    let mut previous: Option<usize> = None;
+    for (spec, label, dotted) in parts {
+        if spec.is_empty() {
+            return None;
+        }
+        let idx = intern(chart, &spec)?;
+        if let Some(from) = previous {
+            chart.edges.push(Edge {
+                from,
+                to: idx,
+                label,
+                dotted,
+            });
+        }
+        previous = Some(idx);
+    }
+    Some(())
+}
+
+fn find_operator(s: &str) -> Option<(usize, usize, bool)> {
+    // Walk char boundaries, not bytes: a node label may contain any script.
+    for (i, _) in s.char_indices() {
+        for (op, dotted) in OPERATORS {
+            if s[i..].starts_with(op) {
+                return Some((i, op.len(), *dotted));
+            }
+        }
+    }
+    None
+}
+
+/// Strip a `-- label` suffix from a node spec, as in `A -- yes --> B`.
+fn split_trailing_label(spec: &str) -> (&str, Option<String>) {
+    let trimmed = spec.trim_end();
+    if let Some(at) = trimmed.rfind("--")
+        && at > 0
+    {
+        let label = trimmed[at + 2..].trim();
+        if !label.is_empty() && !label.contains(['[', ']', '(', ')', '{', '}']) {
+            return (&trimmed[..at], Some(label.to_string()));
+        }
+    }
+    (spec, None)
+}
+
+fn leading_pipe_label(s: &str) -> (Option<String>, &str) {
+    let trimmed = s.trim_start();
+    if let Some(body) = trimmed.strip_prefix('|')
+        && let Some(end) = body.find('|')
+    {
+        return (Some(body[..end].trim().to_string()), &body[end + 1..]);
+    }
+    (None, s)
+}
+
+/// Register a node spec, returning its index. Repeating an id later without a
+/// label reuses the earlier one, which is how mermaid behaves.
+fn intern(chart: &mut Flowchart, spec: &str) -> Option<usize> {
+    let (id, label, shape) = parse_node(spec)?;
+    if let Some(existing) = chart.nodes.iter().position(|n| n.id == id) {
+        if let Some(label) = label {
+            chart.nodes[existing].label = label;
+            chart.nodes[existing].shape = shape;
+        }
+        return Some(existing);
+    }
+    chart.nodes.push(Node {
+        label: label.unwrap_or_else(|| id.clone()),
+        id,
+        shape,
+    });
+    Some(chart.nodes.len() - 1)
+}
+
+fn parse_node(spec: &str) -> Option<(String, Option<String>, Shape)> {
+    let spec = spec.trim();
+    if spec.is_empty() {
+        return None;
+    }
+    let open = spec.find(['[', '(', '{']);
+    let Some(open) = open else {
+        return Some((spec.to_string(), None, Shape::Rect));
+    };
+    let id = spec[..open].trim().to_string();
+    if id.is_empty() {
+        return None;
+    }
+    let body = &spec[open..];
+    let (shape, inner) = if let Some(rest) = body.strip_prefix("([") {
+        (Shape::Stadium, rest.strip_suffix("])")?)
+    } else if let Some(rest) = body.strip_prefix('[') {
+        (Shape::Rect, rest.strip_suffix(']')?)
+    } else if let Some(rest) = body.strip_prefix('(') {
+        (Shape::Round, rest.strip_suffix(')')?)
+    } else if let Some(rest) = body.strip_prefix('{') {
+        (Shape::Diamond, rest.strip_suffix('}')?)
+    } else {
+        return None;
+    };
+    Some((id, Some(unquote(inner)), shape))
+}
+
+fn unquote(s: &str) -> String {
+    let s = s.trim();
+    s.strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .unwrap_or(s)
+        .trim()
+        .to_string()
+}
+
+// ---------------------------------------------------------------------------
+// Flowchart drawing
+// ---------------------------------------------------------------------------
+
+/// Assign each node to a rank: one past the deepest of its parents.
+///
+/// Returns `None` for a cyclic graph, which this renderer does not model.
+fn ranks(chart: &Flowchart) -> Option<Vec<usize>> {
+    let n = chart.nodes.len();
+    let mut indegree = vec![0usize; n];
+    for edge in &chart.edges {
+        if edge.from != edge.to {
+            indegree[edge.to] += 1;
+        }
+    }
+    let mut rank = vec![0usize; n];
+    let mut queue: Vec<usize> = (0..n).filter(|i| indegree[*i] == 0).collect();
+    let mut seen = 0usize;
+
+    while let Some(node) = queue.pop() {
+        seen += 1;
+        for edge in chart
+            .edges
+            .iter()
+            .filter(|e| e.from == node && e.to != node)
+        {
+            rank[edge.to] = rank[edge.to].max(rank[node] + 1);
+            indegree[edge.to] -= 1;
+            if indegree[edge.to] == 0 {
+                queue.push(edge.to);
+            }
+        }
+    }
+    (seen == n).then_some(rank)
+}
+
+struct Box {
+    x: usize,
+    y: usize,
+    w: usize,
+    h: usize,
+}
+
+impl Box {
+    fn center_x(&self) -> usize {
+        self.x + self.w / 2
+    }
+    fn bottom(&self) -> usize {
+        self.y + self.h - 1
+    }
+    fn right(&self) -> usize {
+        self.x + self.w - 1
+    }
+    fn center_y(&self) -> usize {
+        self.y + self.h / 2
+    }
+}
+
+pub fn draw_flowchart(chart: &Flowchart, calc: &WidthCalc) -> Option<Vec<String>> {
+    let rank = ranks(chart)?;
+    let depth = rank.iter().copied().max().unwrap_or(0) + 1;
+    let mut by_rank: Vec<Vec<usize>> = vec![Vec::new(); depth];
+    for (i, r) in rank.iter().enumerate() {
+        by_rank[*r].push(i);
+    }
+
+    let label_width = |i: usize| calc.str(&chart.nodes[i].label);
+    let box_w = |i: usize| label_width(i) + 4;
+
+    match chart.direction {
+        Direction::TopDown => draw_top_down(chart, &by_rank, &rank, calc, box_w),
+        Direction::LeftRight => draw_left_right(chart, &by_rank, &rank, calc, box_w),
+    }
+}
+
+fn draw_top_down(
+    chart: &Flowchart,
+    by_rank: &[Vec<usize>],
+    rank: &[usize],
+    calc: &WidthCalc,
+    box_w: impl Fn(usize) -> usize,
+) -> Option<Vec<String>> {
+    // Widest rank sets the canvas width; every other rank is centred in it.
+    let rank_widths: Vec<usize> = by_rank
+        .iter()
+        .map(|nodes| {
+            nodes.iter().map(|i| box_w(*i)).sum::<usize>() + GAP * nodes.len().saturating_sub(1)
+        })
+        .collect();
+    let content_width = rank_widths.iter().copied().max().unwrap_or(0);
+
+    // Edges that skip a rank get their own lane to the right of every box, so
+    // a long connector never has to cross a node.
+    let long_edges: Vec<usize> = (0..chart.edges.len())
+        .filter(|i| {
+            let e = &chart.edges[*i];
+            rank[e.to] > rank[e.from] + 1
+        })
+        .collect();
+    let width = content_width + long_edges.len() * 2 + 2;
+
+    let mut boxes: Vec<Box> = Vec::with_capacity(chart.nodes.len());
+    boxes.extend((0..chart.nodes.len()).map(|_| Box {
+        x: 0,
+        y: 0,
+        w: 0,
+        h: 0,
+    }));
+
+    let mut y = 0usize;
+    let mut rank_y = Vec::new();
+    for (r, nodes) in by_rank.iter().enumerate() {
+        rank_y.push(y);
+        let mut x = (content_width - rank_widths[r]) / 2;
+        for &i in nodes {
+            let w = box_w(i);
+            boxes[i] = Box { x, y, w, h: 3 };
+            x += w + GAP;
+        }
+        y += 3;
+        if r + 1 < by_rank.len() {
+            y += BAND;
+        }
+    }
+    let height = y;
+    let mut grid = Grid::new(width, height);
+
+    for (i, node) in chart.nodes.iter().enumerate() {
+        draw_box(&mut grid, &boxes[i], &node.label, &node.shape, calc);
+    }
+
+    // Children of the same parent share one horizontal bus, so the glyph where
+    // the bus meets the parent has to know about all of them at once.
+    for parent in 0..chart.nodes.len() {
+        let children: Vec<&Edge> = chart
+            .edges
+            .iter()
+            .filter(|e| e.from == parent && rank[e.to] == rank[parent] + 1)
+            .collect();
+        if !children.is_empty() {
+            fan_out(&mut grid, &boxes[parent], &children, &boxes, calc);
+        }
+    }
+    for (i, edge) in chart.edges.iter().enumerate() {
+        if rank[edge.to] > rank[edge.from] + 1 {
+            let lane = content_width + 1 + long_edges.iter().position(|j| *j == i).unwrap_or(0) * 2;
+            route_lane(&mut grid, &boxes[edge.from], &boxes[edge.to], lane, calc);
+        }
+    }
+    Some(grid.rows())
+}
+
+fn draw_left_right(
+    chart: &Flowchart,
+    by_rank: &[Vec<usize>],
+    rank: &[usize],
+    calc: &WidthCalc,
+    box_w: impl Fn(usize) -> usize,
+) -> Option<Vec<String>> {
+    let column_width: Vec<usize> = by_rank
+        .iter()
+        .map(|nodes| nodes.iter().map(|i| box_w(*i)).max().unwrap_or(0))
+        .collect();
+    let rank_heights: Vec<usize> = by_rank
+        .iter()
+        .map(|nodes| nodes.len() * 3 + nodes.len().saturating_sub(1))
+        .collect();
+    let height = rank_heights.iter().copied().max().unwrap_or(3);
+    let width: usize = column_width.iter().sum::<usize>() + BAND * 2 * by_rank.len() + 2;
+
+    let mut boxes: Vec<Box> = (0..chart.nodes.len())
+        .map(|_| Box {
+            x: 0,
+            y: 0,
+            w: 0,
+            h: 0,
+        })
+        .collect();
+
+    let mut x = 0usize;
+    for (r, nodes) in by_rank.iter().enumerate() {
+        let mut y = (height - rank_heights[r]) / 2;
+        for &i in nodes {
+            boxes[i] = Box {
+                x,
+                y,
+                w: box_w(i),
+                h: 3,
+            };
+            y += 4;
+        }
+        x += column_width[r] + BAND * 2;
+    }
+
+    let mut grid = Grid::new(width, height);
+    for (i, node) in chart.nodes.iter().enumerate() {
+        draw_box(&mut grid, &boxes[i], &node.label, &node.shape, calc);
+    }
+    for edge in &chart.edges {
+        if rank[edge.to] > rank[edge.from] {
+            connect_right(&mut grid, &boxes[edge.from], &boxes[edge.to], calc);
+        }
+    }
+    Some(grid.rows())
+}
+
+fn draw_box(grid: &mut Grid, b: &Box, label: &str, shape: &Shape, calc: &WidthCalc) {
+    let (tl, tr, bl, br) = match shape {
+        Shape::Round | Shape::Stadium | Shape::Diamond => ('╭', '╮', '╰', '╯'),
+        Shape::Rect => ('┌', '┐', '└', '┘'),
+    };
+    // A real lozenge cannot be drawn on a character grid without looking like
+    // a mistake, so a decision node is marked by angle brackets instead.
+    let (left, right) = match shape {
+        Shape::Diamond => ('<', '>'),
+        _ => ('│', '│'),
+    };
+    grid.put(b.x, b.y, tl, calc);
+    grid.put(b.right(), b.y, tr, calc);
+    grid.put(b.x, b.bottom(), bl, calc);
+    grid.put(b.right(), b.bottom(), br, calc);
+    for x in b.x + 1..b.right() {
+        grid.put(x, b.y, '─', calc);
+        grid.put(x, b.bottom(), '─', calc);
+    }
+    grid.put(b.x, b.y + 1, left, calc);
+    grid.put(b.right(), b.y + 1, right, calc);
+    // Clear the interior first: a sequence-diagram note is drawn over the
+    // lifelines it spans, and they would otherwise show through the label.
+    for x in b.x + 1..b.right() {
+        grid.put(x, b.y + 1, ' ', calc);
+    }
+    grid.text(b.x + 2, b.y + 1, label, calc);
+}
+
+/// Draw the band that carries one parent's edges down to the next rank.
+///
+/// All of a parent's children hang off a single horizontal bus. The glyph where
+/// the bus meets a column depends on whether the line continues up (the parent),
+/// down (a child), or both, which is why this cannot be done one edge at a time.
+fn fan_out(grid: &mut Grid, from: &Box, edges: &[&Edge], boxes: &[Box], calc: &WidthCalc) {
+    let fx = from.center_x();
+    let top = from.bottom() + 1;
+    let bottom = boxes[edges[0].to].y;
+    let mid = top + (bottom - top) / 2;
+
+    let mut targets: Vec<usize> = edges.iter().map(|e| boxes[e.to].center_x()).collect();
+    targets.sort_unstable();
+    targets.dedup();
+
+    if targets == [fx] {
+        grid.vline(fx, top, bottom - 1, calc);
+    } else {
+        let lo = targets.iter().copied().min().unwrap().min(fx);
+        let hi = targets.iter().copied().max().unwrap().max(fx);
+        grid.vline(fx, top, mid - 1, calc);
+        grid.hline(lo, hi, mid, calc);
+
+        for &tx in &targets {
+            let glyph = if tx == fx {
+                '┼'
+            } else if tx == lo {
+                '┌'
+            } else if tx == hi {
+                '┐'
+            } else {
+                '┬'
+            };
+            grid.put(tx, mid, glyph, calc);
+            if mid < bottom - 1 {
+                grid.vline(tx, mid + 1, bottom - 1, calc);
+            }
+        }
+        let parent_glyph = if targets.contains(&fx) {
+            '┼'
+        } else if fx == lo {
+            '└'
+        } else if fx == hi {
+            '┘'
+        } else {
+            '┴'
+        };
+        grid.put(fx, mid, parent_glyph, calc);
+    }
+
+    for edge in edges {
+        let tx = boxes[edge.to].center_x();
+        grid.put(tx, bottom.saturating_sub(1), '▼', calc);
+        if let Some(label) = &edge.label {
+            // Above the bus, beside the child's column, clear of both lines.
+            grid.text(tx + 1, mid.saturating_sub(1), label, calc);
+        }
+    }
+}
+
+fn connect_right(grid: &mut Grid, from: &Box, to: &Box, calc: &WidthCalc) {
+    let (fy, ty) = (from.center_y(), to.center_y());
+    let left = from.right() + 1;
+    let right = to.x;
+    let mid = left + (right - left) / 2;
+
+    if fy == ty {
+        grid.hline(left, right - 1, fy, calc);
+    } else {
+        grid.hline(left, mid, fy, calc);
+        grid.put(mid, fy, if ty > fy { '┐' } else { '┘' }, calc);
+        grid.vline(mid, fy.min(ty) + 1, fy.max(ty) - 1, calc);
+        grid.put(mid, ty, if ty > fy { '└' } else { '┌' }, calc);
+        grid.hline(mid + 1, right - 1, ty, calc);
+    }
+    grid.put(right.saturating_sub(1), ty, '▶', calc);
+}
+
+/// Route an edge that skips a rank out to its own lane and back.
+fn route_lane(grid: &mut Grid, from: &Box, to: &Box, lane: usize, calc: &WidthCalc) {
+    let start = from.bottom();
+    let end = to.center_y();
+    grid.hline(from.right() + 1, lane, start, calc);
+    grid.put(lane, start, '┐', calc);
+    grid.vline(lane, start + 1, end - 1, calc);
+    grid.put(lane, end, '┘', calc);
+    grid.hline(to.right() + 1, lane - 1, end, calc);
+    grid.put(to.right() + 1, end, '◀', calc);
+}
+
+// ---------------------------------------------------------------------------
+// Sequence diagrams
+// ---------------------------------------------------------------------------
+
+mod sequence {
+    use super::*;
+
+    #[derive(Debug)]
+    enum Step {
+        Message {
+            from: usize,
+            to: usize,
+            text: String,
+            dashed: bool,
+        },
+        Note {
+            over: Vec<usize>,
+            text: String,
+        },
+    }
+
+    pub fn render(code: &str, calc: &WidthCalc) -> Option<Vec<String>> {
+        let mut names: Vec<(String, String)> = Vec::new();
+        let mut steps: Vec<Step> = Vec::new();
+
+        let intern = |names: &mut Vec<(String, String)>, id: &str| -> usize {
+            let id = id.trim().to_string();
+            match names.iter().position(|(n, _)| *n == id) {
+                Some(i) => i,
+                None => {
+                    names.push((id.clone(), id));
+                    names.len() - 1
+                }
+            }
+        };
+
+        for line in code
+            .lines()
+            .map(str::trim)
+            .skip(1)
+            .filter(|l| !l.is_empty() && !l.starts_with("%%"))
+        {
+            if let Some(rest) = line
+                .strip_prefix("participant ")
+                .or_else(|| line.strip_prefix("actor "))
+            {
+                let (id, label) = match rest.split_once(" as ") {
+                    Some((id, label)) => (id.trim(), label.trim()),
+                    None => (rest.trim(), rest.trim()),
+                };
+                let idx = intern(&mut names, id);
+                names[idx].1 = label.to_string();
+                continue;
+            }
+            if let Some(rest) = line.strip_prefix("Note ") {
+                let rest = rest
+                    .strip_prefix("over ")
+                    .or_else(|| rest.strip_prefix("right of "))
+                    .or_else(|| rest.strip_prefix("left of "))?;
+                let (targets, text) = rest.split_once(':')?;
+                let over = targets
+                    .split(',')
+                    .map(|t| intern(&mut names, t))
+                    .collect::<Vec<_>>();
+                steps.push(Step::Note {
+                    over,
+                    text: text.trim().to_string(),
+                });
+                continue;
+            }
+            // Control-flow blocks change the shape of the diagram, so decline.
+            if line.starts_with("loop")
+                || line.starts_with("alt")
+                || line.starts_with("opt")
+                || line.starts_with("par")
+                || line.starts_with("else")
+                || line == "end"
+                || line.starts_with("activate")
+                || line.starts_with("deactivate")
+            {
+                return None;
+            }
+
+            let (arrow, dashed) = ["-->>", "->>", "-->", "->", "--x", "-x"]
+                .iter()
+                .find(|a| line.contains(**a))
+                .map(|a| (*a, a.starts_with("--")))?;
+            let (left, rest) = line.split_once(arrow)?;
+            let (right, text) = rest.split_once(':')?;
+            let from = intern(&mut names, left);
+            let to = intern(&mut names, right);
+            steps.push(Step::Message {
+                from,
+                to,
+                text: text.trim().to_string(),
+                dashed,
+            });
+        }
+
+        if names.is_empty() || steps.is_empty() {
+            return None;
+        }
+        Some(draw(&names, &steps, calc))
+    }
+
+    /// Left and right columns a note stretches between.
+    fn note_span(over: &[usize], centers: &[usize]) -> (usize, usize) {
+        let lo = over.iter().copied().min().unwrap_or(0);
+        let hi = over.iter().copied().max().unwrap_or(lo);
+        (
+            centers[lo].saturating_sub(1),
+            centers[hi.min(centers.len() - 1)] + 2,
+        )
+    }
+
+    fn note_width(text: &str, lo: usize, hi: usize, calc: &WidthCalc) -> usize {
+        (hi + 1).saturating_sub(lo).max(calc.str(text) + 4)
+    }
+
+    fn draw(names: &[(String, String)], steps: &[Step], calc: &WidthCalc) -> Vec<String> {
+        // Each lifeline gets a column wide enough for its own box, and wide
+        // enough for the longest message that starts or ends on it.
+        let mut column_width: Vec<usize> =
+            names.iter().map(|(_, label)| calc.str(label) + 4).collect();
+        for step in steps {
+            if let Step::Message { from, to, text, .. } = step {
+                let (lo, hi) = (*from.min(to), *from.max(to));
+                let span = hi.abs_diff(lo).max(1);
+                let need = (calc.str(text) + 4) / span;
+                for width in &mut column_width[lo..=hi] {
+                    *width = (*width).max(need);
+                }
+            }
+        }
+
+        let mut centers = Vec::with_capacity(names.len());
+        let mut x = 0usize;
+        for w in &column_width {
+            centers.push(x + w / 2);
+            x += w + GAP;
+        }
+        // A note is drawn as a box spanning its participants, and may be wider
+        // than they are; the canvas has to leave room or its right border is
+        // silently clipped off.
+        let width = steps
+            .iter()
+            .filter_map(|step| match step {
+                Step::Note { over, text } => {
+                    let (lo, hi) = note_span(over, &centers);
+                    Some(lo + note_width(text, lo, hi, calc))
+                }
+                _ => None,
+            })
+            .fold(x + 2, usize::max);
+        let height = 3 + steps.len() * 3 + 1;
+        let mut grid = Grid::new(width, height);
+
+        for (i, (_, label)) in names.iter().enumerate() {
+            let w = calc.str(label) + 4;
+            let bx = centers[i] - w / 2;
+            let b = Box {
+                x: bx,
+                y: 0,
+                w,
+                h: 3,
+            };
+            draw_box(&mut grid, &b, label, &Shape::Rect, calc);
+        }
+
+        // Lifelines run the whole height, under the boxes.
+        for &cx in &centers {
+            grid.vline(cx, 3, height - 1, calc);
+        }
+
+        for (i, step) in steps.iter().enumerate() {
+            let y = 4 + i * 3;
+            match step {
+                Step::Message {
+                    from,
+                    to,
+                    text,
+                    dashed,
+                } => {
+                    let (fx, tx) = (centers[*from], centers[*to]);
+                    let (lo, hi) = (fx.min(tx), fx.max(tx));
+                    let glyph = if *dashed { '╌' } else { '─' };
+                    for x in lo..=hi {
+                        grid.put(x, y, glyph, calc);
+                    }
+                    grid.put(fx, y, if tx > fx { '├' } else { '┤' }, calc);
+                    grid.put(tx, y, if tx > fx { '▶' } else { '◀' }, calc);
+                    // The label sits on the row above its arrow, clear of both
+                    // lifelines.
+                    grid.text(lo + 2, y - 1, text, calc);
+                }
+                Step::Note { over, text } => {
+                    let (lo, hi) = note_span(over, &centers);
+                    let b = Box {
+                        x: lo,
+                        y: y - 1,
+                        w: note_width(text, lo, hi, calc),
+                        h: 3,
+                    };
+                    draw_box(&mut grid, &b, text, &Shape::Round, calc);
+                }
+            }
+        }
+        grid.rows()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const CALC: WidthCalc = WidthCalc {
+        ambiguous_wide: false,
+    };
+
+    fn rows(code: &str) -> Vec<String> {
+        render(code, &CALC).unwrap_or_else(|| panic!("declined to render:\n{code}"))
+    }
+
+    #[test]
+    fn a_linear_flowchart_draws_a_box_per_node() {
+        let out = rows("flowchart TD\n    A[one] --> B[two]\n    B --> C[three]\n");
+        let text = out.join("\n");
+        assert!(text.contains("one") && text.contains("two") && text.contains("three"));
+        assert_eq!(text.matches('┌').count(), 3, "{text}");
+        assert!(text.contains('▼'), "arrows point at the target");
+    }
+
+    #[test]
+    fn node_labels_default_to_the_node_id() {
+        let out = rows("graph TD\n  A --> B\n");
+        let text = out.join("\n");
+        assert!(text.contains('A') && text.contains('B'));
+    }
+
+    #[test]
+    fn a_branch_puts_siblings_on_the_same_rank() {
+        let chart = parse_flowchart("flowchart TD\n A --> B\n A --> C\n").unwrap();
+        let rank = ranks(&chart).unwrap();
+        assert_eq!(rank[0], 0);
+        assert_eq!(rank[1], 1);
+        assert_eq!(rank[2], 1);
+    }
+
+    #[test]
+    fn edge_labels_are_parsed_in_both_spellings() {
+        let a = parse_flowchart("flowchart TD\n A -->|yes| B\n").unwrap();
+        assert_eq!(a.edges[0].label.as_deref(), Some("yes"));
+        let b = parse_flowchart("flowchart TD\n A -- no --> B\n").unwrap();
+        assert_eq!(b.edges[0].label.as_deref(), Some("no"));
+    }
+
+    #[test]
+    fn shapes_are_recognised() {
+        let chart =
+            parse_flowchart("flowchart TD\n A[rect] --> B(round)\n B --> C{choice}\n").unwrap();
+        assert_eq!(chart.nodes[0].shape, Shape::Rect);
+        assert_eq!(chart.nodes[1].shape, Shape::Round);
+        assert_eq!(chart.nodes[2].shape, Shape::Diamond);
+    }
+
+    #[test]
+    fn a_chain_on_one_line_becomes_two_edges() {
+        let chart = parse_flowchart("flowchart LR\n A --> B --> C\n").unwrap();
+        assert_eq!(chart.edges.len(), 2);
+        assert_eq!(chart.nodes.len(), 3);
+    }
+
+    #[test]
+    fn repeating_a_node_id_reuses_it() {
+        let chart = parse_flowchart("flowchart TD\n A[first] --> B\n A --> C\n").unwrap();
+        assert_eq!(chart.nodes.len(), 3);
+        assert_eq!(chart.nodes[0].label, "first");
+    }
+
+    #[test]
+    fn left_to_right_lays_ranks_out_horizontally() {
+        let out = rows("flowchart LR\n A[one] --> B[two]\n");
+        assert!(out.iter().any(|r| r.contains("one") && r.contains("two")));
+        assert!(out.join("\n").contains('▶'));
+    }
+
+    #[test]
+    fn every_row_fits_the_widest_row() {
+        let out = rows("flowchart TD\n A[a very long label indeed] --> B[b]\n A --> C[c]\n");
+        let widths: Vec<usize> = out.iter().map(|r| CALC.str(r)).collect();
+        let max = widths.iter().copied().max().unwrap();
+        assert!(max > 0);
+        assert!(out.iter().all(|r| CALC.str(r) <= max));
+    }
+
+    #[test]
+    fn cjk_labels_are_measured_in_display_columns() {
+        let out = rows("flowchart TD\n A[日本語] --> B[b]\n");
+        let top = out.iter().find(|r| r.contains('┌')).unwrap();
+        // Box is 日本語 (6 columns) plus two spaces and two borders.
+        assert_eq!(CALC.str(top), 10);
+    }
+
+    #[test]
+    fn siblings_hang_off_one_shared_bus() {
+        let out = rows("flowchart TD\n A[p] --> B[l]\n A --> C[r]\n");
+        let bus = out
+            .iter()
+            .find(|r| r.contains('┴'))
+            .expect("the bus meets the parent at a T junction");
+        assert!(bus.starts_with(' ') || bus.starts_with('┌'));
+        assert_eq!(
+            bus.matches('┴').count(),
+            1,
+            "one junction, not one per edge"
+        );
+        assert!(bus.contains('┌') && bus.contains('┐'), "{bus}");
+    }
+
+    #[test]
+    fn a_decision_node_is_marked_with_angle_brackets() {
+        let out = rows("flowchart TD\n A{ok?} --> B[yes]\n");
+        assert!(out.iter().any(|r| r.contains("< ok? >")), "{out:#?}");
+    }
+
+    #[test]
+    fn a_note_is_drawn_over_the_lifelines_it_spans() {
+        let out = rows(
+            "sequenceDiagram\n participant A\n participant B\n A->>B: hi\n Note over A,B: careful\n",
+        );
+        let body = out
+            .iter()
+            .find(|r| r.contains("careful"))
+            .expect("the note text is drawn");
+        // The lifelines must not show through the note's interior.
+        assert!(!body.contains("││"), "{body:?}");
+    }
+
+    #[test]
+    fn a_reply_arrow_points_the_other_way() {
+        let out = rows("sequenceDiagram\n A->>B: ask\n B-->>A: answer\n");
+        let reply = out.iter().find(|r| r.contains('◀')).unwrap();
+        assert!(reply.ends_with('┤'), "{reply:?}");
+    }
+
+    #[test]
+    fn a_cycle_is_declined_rather_than_drawn_wrong() {
+        assert!(render("flowchart TD\n A --> B\n B --> A\n", &CALC).is_none());
+    }
+
+    #[test]
+    fn subgraphs_are_declined() {
+        assert!(render("flowchart TD\n subgraph one\n A --> B\n end\n", &CALC).is_none());
+    }
+
+    #[test]
+    fn unknown_diagram_types_are_declined() {
+        assert!(render("pie title Pets\n  \"Dogs\" : 42\n", &CALC).is_none());
+        assert!(render("gantt\n title A\n", &CALC).is_none());
+        assert!(render("", &CALC).is_none());
+    }
+
+    #[test]
+    fn a_sequence_diagram_draws_lifelines_and_arrows() {
+        let out = rows(
+            "sequenceDiagram\n    participant A as Alice\n    participant B as Bob\n    A->>B: Hello\n    B-->>A: Hi there\n",
+        );
+        let text = out.join("\n");
+        assert!(text.contains("Alice") && text.contains("Bob"));
+        assert!(text.contains("Hello") && text.contains("Hi there"));
+        assert!(text.contains('▶') && text.contains('◀'));
+        assert!(text.contains('╌'), "dashed replies are drawn dashed");
+    }
+
+    #[test]
+    fn sequence_participants_are_implied_by_messages() {
+        let out = rows("sequenceDiagram\n    Alice->>Bob: Hi\n");
+        let text = out.join("\n");
+        assert!(text.contains("Alice") && text.contains("Bob"));
+    }
+
+    #[test]
+    fn sequence_control_flow_is_declined() {
+        assert!(
+            render(
+                "sequenceDiagram\n  loop every minute\n    A->>B: tick\n  end\n",
+                &CALC
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn comments_are_ignored() {
+        let chart = parse_flowchart("flowchart TD\n%% a comment\n A --> B\n").unwrap();
+        assert_eq!(chart.edges.len(), 1);
+    }
+
+    #[test]
+    fn styling_directives_are_ignored_rather_than_declined() {
+        let chart = parse_flowchart(
+            "flowchart TD\n A --> B\n classDef big fill:#f00\n class A big\n style B fill:#0f0\n",
+        )
+        .unwrap();
+        assert_eq!(chart.nodes.len(), 2);
+    }
+}

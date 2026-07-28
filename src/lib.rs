@@ -19,6 +19,7 @@ pub mod graphics;
 pub mod highlight;
 pub mod ir;
 pub mod layout;
+pub mod mermaid;
 pub mod parse;
 pub mod render;
 pub mod screen;
