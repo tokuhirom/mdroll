@@ -356,19 +356,17 @@ fn parse_node(spec: &str) -> Option<(String, Option<String>, Shape)> {
     if id.is_empty() {
         return None;
     }
+    // Longest delimiters first, so `([stadium])` is not read as a round node.
+    const SHAPES: &[(&str, &str, Shape)] = &[
+        ("([", "])", Shape::Stadium),
+        ("[", "]", Shape::Rect),
+        ("(", ")", Shape::Round),
+        ("{", "}", Shape::Diamond),
+    ];
     let body = &spec[open..];
-    let (shape, inner) = if let Some(rest) = body.strip_prefix("([") {
-        (Shape::Stadium, rest.strip_suffix("])")?)
-    } else if let Some(rest) = body.strip_prefix('[') {
-        (Shape::Rect, rest.strip_suffix(']')?)
-    } else if let Some(rest) = body.strip_prefix('(') {
-        (Shape::Round, rest.strip_suffix(')')?)
-    } else if let Some(rest) = body.strip_prefix('{') {
-        (Shape::Diamond, rest.strip_suffix('}')?)
-    } else {
-        return None;
-    };
-    Some((id, Some(unquote(inner)), shape))
+    let (prefix, suffix, shape) = SHAPES.iter().find(|(p, _, _)| body.starts_with(p))?;
+    let inner = body.strip_prefix(prefix)?.strip_suffix(suffix)?;
+    Some((id, Some(unquote(inner)), shape.clone()))
 }
 
 fn unquote(s: &str) -> String {
