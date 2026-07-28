@@ -204,7 +204,7 @@ impl Keymap {
         let mut map = Keymap::default();
         let mut problems = Vec::new();
 
-        for (name, _) in overrides.iter() {
+        for name in overrides.keys() {
             if Action::from_name(name).is_none() {
                 problems.push(format!("unknown action {name:?} in [keys]"));
             }

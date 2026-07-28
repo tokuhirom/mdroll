@@ -70,9 +70,7 @@ pub fn highlight(code: &str, lang: &str, theme_name: &str, base: Style) -> Optio
     let mut highlighter = HighlightLines::new(syntax, theme);
     let mut out: Vec<Span> = Vec::new();
     for line in LinesWithEndings::from(code) {
-        let Ok(ranges) = highlighter.highlight_line(line, &assets.syntaxes) else {
-            return None;
-        };
+        let ranges = highlighter.highlight_line(line, &assets.syntaxes).ok()?;
         for (style, text) in ranges {
             if text.is_empty() {
                 continue;
