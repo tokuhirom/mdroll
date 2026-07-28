@@ -25,6 +25,7 @@ pub struct ConfigFile {
     pub images: Option<bool>,
     pub mouse: Option<bool>,
     pub east_asian_ambiguous_wide: Option<bool>,
+    pub watch: Option<bool>,
     #[serde(default)]
     pub keys: BTreeMap<String, Vec<String>>,
 }
@@ -54,6 +55,7 @@ pub struct Settings {
     pub mouse: bool,
     pub ambiguous_wide: bool,
     pub no_color: bool,
+    pub watch: bool,
     pub keys: BTreeMap<String, Vec<String>>,
 }
 
@@ -70,6 +72,7 @@ impl Default for Settings {
             mouse: false,
             ambiguous_wide: false,
             no_color: false,
+            watch: false,
             keys: BTreeMap::new(),
         }
     }
@@ -108,6 +111,9 @@ impl Settings {
         }
         if let Some(v) = file.east_asian_ambiguous_wide {
             self.ambiguous_wide = v;
+        }
+        if let Some(v) = file.watch {
+            self.watch = v;
         }
         if !file.keys.is_empty() {
             self.keys = file.keys.clone();

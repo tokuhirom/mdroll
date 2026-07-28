@@ -59,6 +59,10 @@ pub struct Cli {
     #[arg(long)]
     pub no_color: bool,
 
+    /// Reload automatically when the file changes on disk.
+    #[arg(long)]
+    pub watch: bool,
+
     /// Never use DECDHL double-height headings, even where they are supported.
     #[arg(short = 'z', long)]
     pub no_big_headings: bool,

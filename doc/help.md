@@ -55,6 +55,7 @@ Press `H` or `Esc` to close this help.
 | Key | Action |
 | --- | --- |
 | `r` | Reload the file |
+| `T` | Table of contents — pick an entry with `o` or `Enter` |
 | `H` | Show this help |
 | `q` `Esc` | Quit |
 

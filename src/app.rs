@@ -8,6 +8,7 @@ use crate::clipboard;
 use crate::config::Settings;
 use crate::graphics::{self, CellSize, ImageStore, Protocol};
 use crate::ir::{Block, BlockKind, Document, HitTarget, Line, Span};
+use crate::keys::{Action, Keymap};
 use crate::layout::{self, Options, row_for_source_line};
 use crate::render::{Decor, Frame, Highlight, Overlay, Placement, Renderer};
 use crate::screen::Screen;
@@ -70,6 +71,8 @@ pub struct App {
     pub pending: Option<char>,
     pub help: bool,
     help_doc: Option<Document>,
+    pub toc: bool,
+    toc_doc: Option<Document>,
 
     pub matches: Vec<Match>,
     pub current_match: Option<usize>,
@@ -80,6 +83,7 @@ pub struct App {
     pub toast: Option<(String, Instant)>,
     pub placement: Placement,
     pub quit: bool,
+    pub keymap: Keymap,
 
     /// Graphics capability and cell geometry, detected once at startup.
     pub graphics: Protocol,
@@ -121,7 +125,9 @@ impl App {
         graphics: GraphicsInfo,
     ) -> App {
         let doc = crate::parse::parse(&source_text, &theme);
+        let (keymap, problems) = Keymap::new(&settings.keys);
         let mut app = App {
+            keymap,
             wrap: settings.wrap,
             source_view: settings.source,
             wrap_before_source: settings.wrap,
@@ -141,6 +147,8 @@ impl App {
             pending: None,
             help: false,
             help_doc: None,
+            toc: false,
+            toc_doc: None,
             matches: Vec::new(),
             current_match: None,
             last_query: String::new(),
@@ -157,6 +165,11 @@ impl App {
         // works if one logical line stays on one row.
         if app.source_view {
             app.wrap = false;
+        }
+        // A key binding that could not be understood is worth saying out loud;
+        // silently unbound keys look like the program is broken.
+        if let Some(first) = problems.first() {
+            app.toast(first);
         }
         app.measure_images();
         app.relayout();
@@ -198,7 +211,7 @@ impl App {
     fn options(&self) -> Options {
         Options {
             wrap: self.wrap,
-            source: self.source_view && !self.help,
+            source: self.source_view && !self.overlaid(),
             max_width: self.settings.width,
             calc: self.calc(),
             double_height: self.double_height,
@@ -208,10 +221,18 @@ impl App {
     }
 
     fn active_doc(&self) -> &Document {
-        match (&self.help, &self.help_doc) {
-            (true, Some(doc)) => doc,
-            _ => &self.doc,
+        if let (true, Some(doc)) = (self.help, &self.help_doc) {
+            return doc;
         }
+        if let (true, Some(doc)) = (self.toc, &self.toc_doc) {
+            return doc;
+        }
+        &self.doc
+    }
+
+    /// True when the main document is hidden behind help or the contents pane.
+    fn overlaid(&self) -> bool {
+        self.help || self.toc
     }
 
     pub fn relayout(&mut self) {
@@ -367,6 +388,8 @@ impl App {
         self.doc = crate::parse::parse(&self.source_text, &self.theme);
         self.measure_images();
         self.help_doc = None;
+        self.toc_doc = None;
+        self.toc = false;
         if self.help {
             self.help_doc = Some(crate::parse::parse(HELP, &self.theme));
         }
@@ -395,11 +418,90 @@ impl App {
 
     pub fn toggle_help(&mut self) {
         self.help = !self.help;
-        if self.help && self.help_doc.is_none() {
-            self.help_doc = Some(crate::parse::parse(HELP, &self.theme));
+        if self.help {
+            self.toc = false;
+            if self.help_doc.is_none() {
+                self.help_doc = Some(crate::parse::parse(HELP, &self.theme));
+            }
         }
         self.scroll = 0;
+        self.cursor = None;
         self.relayout();
+    }
+
+    /// A table of contents, built as a Markdown document of links.
+    ///
+    /// Reusing the document machinery means the link picker, the block cursor,
+    /// and `o` all work in the contents pane without any new modes.
+    pub fn toggle_toc(&mut self) {
+        self.toc = !self.toc;
+        if self.toc {
+            self.help = false;
+            let markdown = self.toc_markdown();
+            if markdown.is_none() {
+                self.toc = false;
+                self.toast("no headings");
+                return;
+            }
+            self.toc_doc = Some(crate::parse::parse(&markdown.unwrap(), &self.theme));
+        }
+        self.scroll = 0;
+        self.cursor = None;
+        self.relayout();
+    }
+
+    fn toc_markdown(&self) -> Option<String> {
+        let headings: Vec<(u8, String, usize)> = self
+            .doc
+            .blocks
+            .iter()
+            .filter_map(|b| {
+                b.heading_level()
+                    .map(|level| (level, b.text(), b.source_range.start))
+            })
+            .collect();
+        if headings.is_empty() {
+            return None;
+        }
+        let mut out = String::from(
+            "# Contents
+
+",
+        );
+        let top = headings.iter().map(|(l, _, _)| *l).min().unwrap_or(1);
+        for (level, text, line) in headings {
+            let indent = "  ".repeat((level.saturating_sub(top)) as usize);
+            let label = text.replace(['[', ']'], "");
+            out.push_str(&format!(
+                "{indent}- [{label}](#line-{line})
+"
+            ));
+        }
+        Some(out)
+    }
+
+    /// The innermost heading at or above the top of the screen.
+    pub fn breadcrumb(&self) -> String {
+        if self.overlaid() {
+            return String::new();
+        }
+        let line = self.current_source_line();
+        let mut trail: Vec<(u8, String)> = Vec::new();
+        for block in &self.doc.blocks {
+            let Some(level) = block.heading_level() else {
+                continue;
+            };
+            if block.source_range.start > line {
+                break;
+            }
+            trail.retain(|(l, _)| *l < level);
+            trail.push((level, block.text()));
+        }
+        trail
+            .into_iter()
+            .map(|(_, text)| text)
+            .collect::<Vec<_>>()
+            .join(" › ")
     }
 
     // ---- block cursor and yanking ---------------------------------------
@@ -556,6 +658,17 @@ impl App {
     }
 
     pub fn open(&mut self, url: &str) {
+        // Contents-pane entries link to a source line rather than a file.
+        if let Some(line) = url.strip_prefix("#line-")
+            && let Ok(line) = line.parse::<usize>()
+        {
+            self.toc = false;
+            self.help = false;
+            self.cursor = None;
+            self.relayout();
+            self.scroll = row_for_source_line(&self.lines, line).min(self.max_scroll());
+            return;
+        }
         // A relative Markdown path opens in the viewer; anything else is the
         // system's problem.
         let local = self.resolve_local(url);
@@ -603,6 +716,11 @@ impl App {
         self.reparse();
         self.toast(&format!("opened {}", path.display()));
         Ok(())
+    }
+
+    /// Last modification time of the open file, for `--watch`.
+    pub fn mtime(&self) -> Option<std::time::SystemTime> {
+        std::fs::metadata(self.path.as_ref()?).ok()?.modified().ok()
     }
 
     pub fn reload(&mut self) {
@@ -719,7 +837,13 @@ impl App {
         let percent = (self.scroll * 100) / total;
         let mode = if self.source_view { "source" } else { "render" };
         let wrap = if self.wrap { "wrap" } else { "no-wrap" };
-        format!(" {name}  {mode}  {wrap}  {percent}%  {} ", self.theme.name)
+        let where_ = self.breadcrumb();
+        let suffix = if where_.is_empty() {
+            String::new()
+        } else {
+            format!("  {where_}")
+        };
+        format!(" {name}  {mode}  {wrap}  {percent}%{suffix} ")
     }
 
     // ---- drawing ---------------------------------------------------------
@@ -858,74 +982,78 @@ impl App {
             }
         }
 
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        match key.code {
-            KeyCode::Char('q') => self.quit = true,
-            KeyCode::Esc if self.help => self.toggle_help(),
-            KeyCode::Esc if !self.matches.is_empty() => {
+        let Some(action) = self.keymap.lookup(&key) else {
+            return Ok(());
+        };
+        self.act(out, action)
+    }
+
+    pub fn act<W: Write>(&mut self, out: &mut W, action: Action) -> Result<()> {
+        match action {
+            // Escape backs out of whatever is on top before it quits.
+            Action::Quit if self.help => self.toggle_help(),
+            Action::Quit if self.toc => self.toggle_toc(),
+            Action::Quit if !self.matches.is_empty() => {
                 self.matches.clear();
                 self.last_query.clear();
             }
-            KeyCode::Esc => self.quit = true,
+            Action::Quit => self.quit = true,
 
-            KeyCode::Char('j') | KeyCode::Down => self.scroll_by(1),
-            KeyCode::Char('k') | KeyCode::Up => self.scroll_by(-1),
-            KeyCode::Char('d') => self.half_page(true),
-            KeyCode::Char('u') => self.half_page(false),
-            KeyCode::Char('f') | KeyCode::Char(' ') | KeyCode::PageDown => self.page(true),
-            KeyCode::Char('b') | KeyCode::PageUp => self.page(false),
-            KeyCode::Char('g') | KeyCode::Home => self.scroll = 0,
-            KeyCode::Char('G') | KeyCode::End => self.scroll = self.max_scroll(),
-            KeyCode::Char('h') | KeyCode::Left => {
-                self.hoffset = self.hoffset.saturating_sub(4);
-            }
-            KeyCode::Char('l') | KeyCode::Right if !ctrl => {
+            Action::ScrollDown => self.scroll_by(1),
+            Action::ScrollUp => self.scroll_by(-1),
+            Action::HalfPageDown => self.half_page(true),
+            Action::HalfPageUp => self.half_page(false),
+            Action::PageDown => self.page(true),
+            Action::PageUp => self.page(false),
+            Action::Top => self.scroll = 0,
+            Action::Bottom => self.scroll = self.max_scroll(),
+            Action::ScrollLeft => self.hoffset = self.hoffset.saturating_sub(4),
+            Action::ScrollRight => {
                 if !self.wrap {
                     self.hoffset += 4;
                 }
             }
-            KeyCode::Char('0') => self.hoffset = 0,
+            Action::ResetScroll => self.hoffset = 0,
 
-            KeyCode::Char('w') => self.toggle_wrap(),
-            KeyCode::Char('s') => self.toggle_source(),
-            KeyCode::Char('t') => self.cycle_theme(),
-            KeyCode::Char('z') => self.toggle_double_height(),
-            KeyCode::Char('i') => self.toggle_images(),
+            Action::ToggleWrap => self.toggle_wrap(),
+            Action::ToggleSource => self.toggle_source(),
+            Action::CycleTheme => self.cycle_theme(),
+            Action::ToggleBigHeadings => self.toggle_double_height(),
+            Action::ToggleImages => self.toggle_images(),
 
-            KeyCode::Tab | KeyCode::BackTab => {
-                self.move_cursor(key.code == KeyCode::Tab);
-            }
-            KeyCode::Char('y') => self.pending = Some('y'),
-            KeyCode::Char('Y') => self.yank(out, Yank::Rendered)?,
-            KeyCode::Char('V') => {
+            Action::CursorNext => self.move_cursor(true),
+            Action::CursorPrev => self.move_cursor(false),
+            Action::YankPrefix => self.pending = Some('y'),
+            Action::YankRendered => self.yank(out, Yank::Rendered)?,
+            Action::SelectLines => {
                 self.selection = Some((self.scroll, self.scroll));
                 self.mode = Mode::Select;
             }
 
-            KeyCode::Char('F') => self.start_link_pick(),
-            KeyCode::Char('o') | KeyCode::Enter => match self.target_under_cursor() {
+            Action::LinkPick => self.start_link_pick(),
+            Action::OpenUnderCursor => match self.target_under_cursor() {
                 Some(url) => self.open(&url),
                 None => self.toast("no link under the cursor"),
             },
 
-            KeyCode::Char('/') => {
+            Action::SearchForward => {
                 self.mode = Mode::Search {
                     query: String::new(),
                     forward: true,
                 }
             }
-            KeyCode::Char('?') => {
+            Action::SearchBackward => {
                 self.mode = Mode::Search {
                     query: String::new(),
                     forward: false,
                 }
             }
-            KeyCode::Char('n') => self.jump_match(self.last_forward),
-            KeyCode::Char('N') => self.jump_match(!self.last_forward),
+            Action::NextMatch => self.jump_match(self.last_forward),
+            Action::PrevMatch => self.jump_match(!self.last_forward),
 
-            KeyCode::Char('r') => self.reload(),
-            KeyCode::Char('H') => self.toggle_help(),
-            _ => {}
+            Action::Reload => self.reload(),
+            Action::Contents => self.toggle_toc(),
+            Action::Help => self.toggle_help(),
         }
         Ok(())
     }
@@ -1318,6 +1446,57 @@ mod tests {
         press(&mut a, 'H');
         assert!(!a.help);
         assert!(a.lines.iter().any(|l| l.text().contains("Real")));
+    }
+
+    #[test]
+    fn the_contents_pane_lists_every_heading_as_a_link() {
+        let mut a = app("# One\n\ntext\n\n## Two\n\nmore\n\n# Three\n");
+        press(&mut a, 'T');
+        assert!(a.toc);
+        let text: String = a.lines.iter().map(|l| l.text()).collect();
+        assert!(text.contains("One") && text.contains("Two") && text.contains("Three"));
+        assert_eq!(a.active_doc().links.len(), 3);
+    }
+
+    #[test]
+    fn a_contents_entry_jumps_to_its_heading_and_closes_the_pane() {
+        let body = format!("# Top\n\n{}\n## Bottom\n\ntail\n", "filler\n\n".repeat(40));
+        let mut a = app(&body);
+        press(&mut a, 'T');
+        let url = a.active_doc().links[1].url.clone();
+        assert!(url.starts_with("#line-"), "{url}");
+        a.open(&url);
+        assert!(!a.toc, "the pane closes once you pick something");
+        assert!(a.current_source_line() > 40, "jumped to the heading");
+    }
+
+    #[test]
+    fn a_document_with_no_headings_says_so() {
+        let mut a = app("just a paragraph\n");
+        press(&mut a, 'T');
+        assert!(!a.toc);
+        assert_eq!(a.toast.as_ref().unwrap().0, "no headings");
+    }
+
+    #[test]
+    fn the_breadcrumb_names_the_innermost_enclosing_section() {
+        let mut a = app("# Top\n\n## Middle\n\nbody\n\n### Leaf\n\nmore\n");
+        a.scroll = a.lines.len() - 1;
+        assert_eq!(a.breadcrumb(), "Top › Middle › Leaf");
+    }
+
+    #[test]
+    fn the_breadcrumb_pops_back_out_of_a_finished_subsection() {
+        let a = app("# One\n\n## Deep\n\nbody\n\n# Two\n\ntail\n");
+        let mut a = a;
+        a.scroll = a.lines.len() - 1;
+        assert_eq!(a.breadcrumb(), "Two");
+    }
+
+    #[test]
+    fn the_breadcrumb_is_empty_above_the_first_heading() {
+        let a = app("intro text\n\n# Later\n");
+        assert_eq!(a.breadcrumb(), "");
     }
 
     #[test]

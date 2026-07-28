@@ -18,6 +18,7 @@ pub mod config;
 pub mod graphics;
 pub mod highlight;
 pub mod ir;
+pub mod keys;
 pub mod layout;
 pub mod mermaid;
 pub mod parse;

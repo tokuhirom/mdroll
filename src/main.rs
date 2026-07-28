@@ -136,6 +136,9 @@ fn resolve(cli: &Cli) -> Result<Settings> {
     if cli.no_color {
         settings.no_color = true;
     }
+    if cli.watch {
+        settings.watch = true;
+    }
     if cli.no_big_headings {
         settings.double_height = false;
     }
@@ -204,12 +207,28 @@ fn run(app: &mut App) -> Result<()> {
 
     let mut out = std::io::BufWriter::new(std::io::stdout());
     app.draw(&mut out, &renderer)?;
+    let mut seen_mtime = app.mtime();
 
     while !app.quit {
         // Wake up often enough to retire a toast without a keystroke.
         if !event::poll(Duration::from_millis(200))? {
+            let mut redraw = false;
             if app.toast_expired() {
                 app.toast = None;
+                redraw = true;
+            }
+            // Polling rather than an inotify dependency: a viewer that wakes up
+            // five times a second costs nothing, and this works identically on
+            // every platform and over network filesystems.
+            if app.settings.watch {
+                let now = app.mtime();
+                if now != seen_mtime {
+                    seen_mtime = now;
+                    app.reload();
+                    redraw = true;
+                }
+            }
+            if redraw {
                 app.draw(&mut out, &renderer)?;
             }
             continue;

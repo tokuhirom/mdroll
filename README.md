@@ -118,6 +118,7 @@ on a terminal.
 | `--mouse` | Enable mouse capture (needed for image click actions). Off by default. |
 | `--no-images` | Disable inline image rendering. |
 | `--no-color` | Plain output, no ANSI styling. |
+| `--watch` | Reload automatically when the file changes on disk. |
 | `-z`, `--no-big-headings` | Never use DECDHL double-height headings. |
 | `--ambiguous-wide` | Treat East Asian Ambiguous characters as two columns. |
 | `--config <PATH>` | Use an alternate config file. |
@@ -200,6 +201,7 @@ gives you the text exactly as written.
 | Key | Action |
 | --- | --- |
 | `r` | Reload the file |
+| `T` | Table of contents |
 | `H` | Show help |
 | `q` / `Esc` | Quit |
 
@@ -442,12 +444,26 @@ double_height_headings = true
 images = true
 mouse = false
 east_asian_ambiguous_wide = true
+watch = false
 
 [keys]
-# override any binding
+# Naming an action replaces all of its default bindings. An empty list
+# unbinds it.
 quit = ["q", "Esc"]
 toggle_wrap = ["w"]
+half_page_down = ["Ctrl-d"]
+contents = []
 ```
+
+Action names are `quit`, `scroll_down`, `scroll_up`, `half_page_down`,
+`half_page_up`, `page_down`, `page_up`, `top`, `bottom`, `scroll_left`,
+`scroll_right`, `reset_scroll`, `toggle_wrap`, `toggle_source`, `cycle_theme`,
+`toggle_big_headings`, `toggle_images`, `cursor_next`, `cursor_prev`, `yank`,
+`yank_rendered`, `select_lines`, `link_pick`, `open`, `search_forward`,
+`search_backward`, `next_match`, `prev_match`, `reload`, `contents`, and `help`.
+Key specs are a single character, a name such as `Esc`, `Space`, `Tab`,
+`Shift-Tab`, `PgDn`, `Home`, or an arrow, optionally prefixed with `Ctrl-` or
+`Alt-`.
 
 ---
 
@@ -519,8 +535,8 @@ toggle_wrap = ["w"]
 ### v0.10 — Finding things
 
 - [x] Incremental search with `/`, `?`, `n`, `N`
-- [ ] Section breadcrumb in the header region
-- [ ] Table of contents pane
+- [x] Section breadcrumb, shown in the status line
+- [x] Table of contents pane (`T`)
 
 ### v0.11 — Images and files
 
@@ -528,13 +544,13 @@ toggle_wrap = ["w"]
 - [x] Optional mouse capture (`--mouse`) with rectangle hit-testing
 - [x] File browser when invoked with no arguments
 - [x] `r` to reload
-- [ ] `--watch` for live reload
+- [x] `--watch` for live reload
 
 ### v1.0
 
-- [ ] Key remapping through config
+- [x] Key remapping through config
 - [ ] Rasterized heading fallback for non-DECDHL terminals
-- [ ] Release automation via `dist`, binaries for macOS/Linux/Windows
+- [x] Release automation, binaries for macOS/Linux/Windows
 - [ ] Documentation and man page
 
 ### Beyond
