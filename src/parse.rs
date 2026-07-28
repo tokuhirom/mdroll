@@ -397,7 +397,20 @@ impl<'t> Builder<'t> {
             NodeValue::HtmlInline(html) => {
                 out.push(Span::new(html.clone(), style.patch(theme.dim)).with_link(link));
             }
-            NodeValue::SoftBreak => out.push(Span::new(" ", style).with_link(link)),
+            NodeValue::SoftBreak => {
+                // A newline between two full-width characters is a wrapping
+                // artefact of the source file, not a word space. Turning it
+                // into a space puts a visible gap in the middle of a Japanese
+                // sentence, which is why CJK text written at 80 columns looks
+                // wrong in most viewers.
+                let before = out.last().and_then(|s| s.text.chars().next_back());
+                let after = node.next_sibling().and_then(first_char);
+                let joined =
+                    matches!((before, after), (Some(a), Some(b)) if is_wide(a) && is_wide(b));
+                if !joined {
+                    out.push(Span::new(" ", style).with_link(link));
+                }
+            }
             NodeValue::LineBreak => out.push(Span::new("\n", style)),
             NodeValue::Emph => self.children_inline(node, style.patch(theme.emph), link, out),
             NodeValue::Strong => self.children_inline(node, style.patch(theme.strong), link, out),
@@ -492,6 +505,21 @@ fn alert_label(kind: AlertType) -> &'static str {
         AlertType::Important => "IMPORTANT",
         AlertType::Warning => "WARNING",
         AlertType::Caution => "CAUTION",
+    }
+}
+
+/// Whether a character occupies two columns, which for this purpose means
+/// "belongs to a script that does not separate words with spaces".
+fn is_wide(c: char) -> bool {
+    unicode_width::UnicodeWidthChar::width(c) == Some(2)
+}
+
+/// The first character any inline node will contribute.
+fn first_char<'a>(node: &'a AstNode<'a>) -> Option<char> {
+    match &node.data.borrow().value {
+        NodeValue::Text(text) => text.chars().next(),
+        NodeValue::Code(code) => code.literal.chars().next(),
+        _ => node.children().find_map(first_char),
     }
 }
 
@@ -680,6 +708,25 @@ mod tests {
     fn soft_breaks_become_spaces_so_paragraphs_reflow() {
         let d = doc("one\ntwo\n");
         assert_eq!(d.blocks[0].text(), "one two");
+    }
+
+    #[test]
+    fn a_soft_break_between_full_width_characters_adds_no_space() {
+        let d = doc("日本語の文章が\n続きます。\n");
+        assert_eq!(d.blocks[0].text(), "日本語の文章が続きます。");
+    }
+
+    #[test]
+    fn a_soft_break_beside_latin_still_becomes_a_space() {
+        assert_eq!(doc("日本語\ntext\n").blocks[0].text(), "日本語 text");
+        assert_eq!(doc("text\n日本語\n").blocks[0].text(), "text 日本語");
+    }
+
+    #[test]
+    fn a_soft_break_before_emphasis_looks_past_the_markup() {
+        // The next node is Emph, not Text, so the lookahead has to descend.
+        let d = doc("日本語が\n**続きます**。\n");
+        assert_eq!(d.blocks[0].text(), "日本語が続きます。");
     }
 
     #[test]

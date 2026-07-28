@@ -29,40 +29,95 @@ const CANDIDATES: &[&str] = &[
     "C:\\Windows\\Fonts\\arialbd.ttf",
 ];
 
+fn fc_match(pattern: &str) -> Option<PathBuf> {
+    let output = std::process::Command::new("fc-match")
+        .args(["-f", "%{file}", pattern])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let path = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim().to_string());
+    path.is_file().then_some(path)
+}
+
 /// Locate a bold font to draw headings with.
 ///
 /// fontconfig knows the answer on Linux and is usually installed; the hardcoded
 /// list is the fallback, and if neither turns anything up the caller simply
 /// does not offer rasterized headings.
 pub fn find_font() -> Option<PathBuf> {
-    if let Ok(output) = std::process::Command::new("fc-match")
-        .args(["-f", "%{file}", "sans-serif:bold"])
-        .output()
-        && output.status.success()
+    fc_match("sans-serif:bold")
+        .or_else(|| CANDIDATES.iter().map(PathBuf::from).find(|p| p.is_file()))
+}
+
+/// Fonts to draw headings with, most preferred first.
+///
+/// A Latin bold face has no CJK glyphs, so a heading in Japanese would come out
+/// as a row of blanks. The chain ends with whatever fontconfig recommends for
+/// Japanese, and glyphs are looked up in order.
+pub fn font_chain() -> Vec<PathBuf> {
+    let mut fonts: Vec<PathBuf> = Vec::new();
+    for candidate in [
+        find_font(),
+        fc_match("sans-serif:bold:lang=ja"),
+        fc_match("sans-serif:lang=ja"),
+    ]
+    .into_iter()
+    .flatten()
     {
-        let path = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim().to_string());
-        if path.is_file() {
-            return Some(path);
+        if !fonts.contains(&candidate) {
+            fonts.push(candidate);
         }
     }
-    CANDIDATES.iter().map(PathBuf::from).find(|p| p.is_file())
+    fonts
 }
 
 pub struct Renderer {
-    font: FontVec,
+    /// Ordered fallback chain; the first font with a glyph for a character
+    /// draws it.
+    fonts: Vec<FontVec>,
+}
+
+fn load_font(path: &std::path::Path) -> Result<FontVec> {
+    let bytes = std::fs::read(path)?;
+    // A .ttc is a collection; index 0 is the right face for every fontconfig
+    // recommendation seen so far.
+    let font = if path.extension().is_some_and(|e| e == "ttc") {
+        FontVec::try_from_vec_and_index(bytes, 0)
+    } else {
+        FontVec::try_from_vec(bytes)
+    };
+    match font {
+        Ok(font) => Ok(font),
+        Err(_) => bail!("{} is not a usable font", path.display()),
+    }
 }
 
 impl Renderer {
     pub fn load(path: &std::path::Path) -> Result<Renderer> {
-        let bytes = std::fs::read(path)?;
-        let Ok(font) = FontVec::try_from_vec(bytes) else {
-            bail!("{} is not a usable font", path.display());
-        };
-        Ok(Renderer { font })
+        Ok(Renderer {
+            fonts: vec![load_font(path)?],
+        })
     }
 
     pub fn discover() -> Option<Renderer> {
-        Renderer::load(&find_font()?).ok()
+        let fonts: Vec<FontVec> = font_chain()
+            .iter()
+            .filter_map(|p| load_font(p).ok())
+            .collect();
+        (!fonts.is_empty()).then_some(Renderer { fonts })
+    }
+
+    /// The first font in the chain with a glyph for `c`.
+    fn pick(&self, c: char) -> (&FontVec, ab_glyph::GlyphId) {
+        for font in &self.fonts {
+            let id = font.glyph_id(c);
+            if id.0 != 0 {
+                return (font, id);
+            }
+        }
+        (&self.fonts[0], self.fonts[0].glyph_id(c))
     }
 
     /// Draw `text` into an RGBA bitmap `cols` by `rows` cells in size.
@@ -86,16 +141,19 @@ impl Renderer {
 
         // Leave a little headroom so ascenders and descenders are not clipped.
         let px = (height as f32 * 0.78).max(4.0);
-        let scaled = self.font.as_scaled(PxScale::from(px));
-        let ascent = scaled.ascent();
+        let primary = self.fonts[0].as_scaled(PxScale::from(px));
+        let ascent = primary.ascent();
 
         let mut canvas = vec![0u8; (width * height * 4) as usize];
         let mut pen = 0.0f32;
-        let baseline = ascent + (height as f32 - scaled.height()) / 2.0;
+        // One baseline for the whole run, taken from the primary font, so a
+        // fallback glyph does not sit at a different height from its neighbours.
+        let baseline = ascent + (height as f32 - primary.height()) / 2.0;
         let mut previous: Option<ab_glyph::GlyphId> = None;
 
         for c in text.chars() {
-            let id = self.font.glyph_id(c);
+            let (font, id) = self.pick(c);
+            let scaled = font.as_scaled(PxScale::from(px));
             if let Some(prev) = previous {
                 pen += scaled.kern(prev, id);
             }
@@ -103,7 +161,7 @@ impl Renderer {
 
             let glyph =
                 id.with_scale_and_position(PxScale::from(px), ab_glyph::point(pen, baseline));
-            if let Some(outline) = self.font.outline_glyph(glyph) {
+            if let Some(outline) = font.outline_glyph(glyph) {
                 let bounds = outline.px_bounds();
                 outline.draw(|gx, gy, coverage| {
                     let x = bounds.min.x as i32 + gx as i32;
@@ -195,6 +253,46 @@ mod tests {
             .find(|p| p.0[3] > 200)
             .expect("something was drawn");
         assert_eq!((painted.0[0], painted.0[1], painted.0[2]), (10, 200, 30));
+    }
+
+    #[test]
+    fn cjk_text_finds_a_glyph_through_the_fallback_chain() {
+        let Some(renderer) = renderer() else {
+            return;
+        };
+        // A Latin bold face has no kanji; if the chain is not consulted the
+        // bitmap comes out blank.
+        let png = renderer
+            .render("日本語の見出し", (255, 255, 255), 30, 2, CELL)
+            .unwrap();
+        let image = image::load_from_memory(&png).unwrap().to_rgba8();
+        let painted = image.pixels().filter(|p| p.0[3] > 128).count();
+        assert!(
+            painted > 100,
+            "only {painted} pixels drawn — glyphs missing"
+        );
+    }
+
+    #[test]
+    fn a_mixed_script_heading_draws_both_scripts() {
+        let Some(renderer) = renderer() else {
+            return;
+        };
+        let latin = renderer
+            .render("Heading", (255, 255, 255), 30, 2, CELL)
+            .unwrap();
+        let mixed = renderer
+            .render("Heading 見出し", (255, 255, 255), 30, 2, CELL)
+            .unwrap();
+        let count = |png: &[u8]| {
+            image::load_from_memory(png)
+                .unwrap()
+                .to_rgba8()
+                .pixels()
+                .filter(|p| p.0[3] > 128)
+                .count()
+        };
+        assert!(count(&mixed) > count(&latin), "the kanji added nothing");
     }
 
     #[test]
