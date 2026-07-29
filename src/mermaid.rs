@@ -50,6 +50,9 @@ pub struct Flowchart {
     pub direction: Direction,
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
+    /// `RL` and `BT`, whose edges were turned round to lay the chart out. The
+    /// arrowheads have to be put back on the end the document asked for.
+    pub reversed: bool,
 }
 
 /// Render a mermaid diagram, or return `None` if it uses anything unsupported.
@@ -191,6 +194,7 @@ pub fn parse_flowchart(code: &str) -> Option<Flowchart> {
         direction,
         nodes: Vec::new(),
         edges: Vec::new(),
+        reversed,
     };
 
     for line in lines {
@@ -213,6 +217,10 @@ pub fn parse_flowchart(code: &str) -> Option<Flowchart> {
     if chart.nodes.is_empty() {
         return None;
     }
+    // Turning the edges round is what puts the ranks where mermaid puts them:
+    // a `BT` chart's source at the bottom, an `RL` chart's at the right. It
+    // says nothing about which way the arrows point, which is why the drawing
+    // is told about it rather than left to infer it from the edges.
     if reversed {
         for edge in &mut chart.edges {
             std::mem::swap(&mut edge.from, &mut edge.to);
@@ -518,13 +526,27 @@ fn draw_top_down(
             .filter(|e| e.from == parent && rank[e.to] == rank[parent] + 1)
             .collect();
         if !children.is_empty() {
-            fan_out(&mut grid, &boxes[parent], &children, &boxes, calc);
+            fan_out(
+                &mut grid,
+                &boxes[parent],
+                &children,
+                &boxes,
+                chart.reversed,
+                calc,
+            );
         }
     }
     for (i, edge) in chart.edges.iter().enumerate() {
         if rank[edge.to] > rank[edge.from] + 1 {
             let lane = content_width + 1 + long_edges.iter().position(|j| *j == i).unwrap_or(0) * 2;
-            route_lane(&mut grid, &boxes[edge.from], &boxes[edge.to], lane, calc);
+            route_lane(
+                &mut grid,
+                &boxes[edge.from],
+                &boxes[edge.to],
+                lane,
+                chart.reversed,
+                calc,
+            );
         }
     }
     Some(grid.rows())
@@ -578,7 +600,13 @@ fn draw_left_right(
     }
     for edge in &chart.edges {
         if rank[edge.to] > rank[edge.from] {
-            connect_right(&mut grid, &boxes[edge.from], &boxes[edge.to], calc);
+            connect_right(
+                &mut grid,
+                &boxes[edge.from],
+                &boxes[edge.to],
+                chart.reversed,
+                calc,
+            );
         }
     }
     Some(grid.rows())
@@ -618,7 +646,17 @@ fn draw_box(grid: &mut Grid, b: &Box, label: &str, shape: &Shape, calc: &WidthCa
 /// All of a parent's children hang off a single horizontal bus. The glyph where
 /// the bus meets a column depends on whether the line continues up (the parent),
 /// down (a child), or both, which is why this cannot be done one edge at a time.
-fn fan_out(grid: &mut Grid, from: &Box, edges: &[&Edge], boxes: &[Box], calc: &WidthCalc) {
+///
+/// In a `BT` chart every one of these edges was written pointing the other way,
+/// so the arrowheads belong at the top, on the parent, where all of them meet.
+fn fan_out(
+    grid: &mut Grid,
+    from: &Box,
+    edges: &[&Edge],
+    boxes: &[Box],
+    reversed: bool,
+    calc: &WidthCalc,
+) {
     let fx = from.center_x();
     let top = from.bottom() + 1;
     let bottom = boxes[edges[0].to].y;
@@ -663,9 +701,14 @@ fn fan_out(grid: &mut Grid, from: &Box, edges: &[&Edge], boxes: &[Box], calc: &W
         grid.put(fx, mid, parent_glyph, calc);
     }
 
+    if reversed {
+        grid.put(fx, top, '▲', calc);
+    }
     for edge in edges {
         let tx = boxes[edge.to].center_x();
-        grid.put(tx, bottom.saturating_sub(1), '▼', calc);
+        if !reversed {
+            grid.put(tx, bottom.saturating_sub(1), '▼', calc);
+        }
         if let Some(label) = &edge.label {
             // Above the bus, beside the child's column, clear of both lines.
             grid.text(tx + 1, mid.saturating_sub(1), label, calc);
@@ -673,7 +716,7 @@ fn fan_out(grid: &mut Grid, from: &Box, edges: &[&Edge], boxes: &[Box], calc: &W
     }
 }
 
-fn connect_right(grid: &mut Grid, from: &Box, to: &Box, calc: &WidthCalc) {
+fn connect_right(grid: &mut Grid, from: &Box, to: &Box, reversed: bool, calc: &WidthCalc) {
     let (fy, ty) = (from.center_y(), to.center_y());
     let left = from.right() + 1;
     let right = to.x;
@@ -688,11 +731,24 @@ fn connect_right(grid: &mut Grid, from: &Box, to: &Box, calc: &WidthCalc) {
         grid.put(mid, ty, if ty > fy { '└' } else { '┌' }, calc);
         grid.hline(mid + 1, right - 1, ty, calc);
     }
-    grid.put(right.saturating_sub(1), ty, '▶', calc);
+    // An `RL` chart's edges were turned round to place the ranks, so the head
+    // goes back on the left, against the box the document called the target.
+    if reversed {
+        grid.put(left, fy, '◀', calc);
+    } else {
+        grid.put(right.saturating_sub(1), ty, '▶', calc);
+    }
 }
 
 /// Route an edge that skips a rank out to its own lane and back.
-fn route_lane(grid: &mut Grid, from: &Box, to: &Box, lane: usize, calc: &WidthCalc) {
+fn route_lane(
+    grid: &mut Grid,
+    from: &Box,
+    to: &Box,
+    lane: usize,
+    reversed: bool,
+    calc: &WidthCalc,
+) {
     let start = from.bottom();
     let end = to.center_y();
     grid.hline(from.right() + 1, lane, start, calc);
@@ -700,7 +756,12 @@ fn route_lane(grid: &mut Grid, from: &Box, to: &Box, lane: usize, calc: &WidthCa
     grid.vline(lane, start + 1, end - 1, calc);
     grid.put(lane, end, '┘', calc);
     grid.hline(to.right() + 1, lane - 1, end, calc);
-    grid.put(to.right() + 1, end, '◀', calc);
+    let (head_x, head_y) = if reversed {
+        (from.right() + 1, start)
+    } else {
+        (to.right() + 1, end)
+    };
+    grid.put(head_x, head_y, '◀', calc);
 }
 
 // ---------------------------------------------------------------------------
@@ -1046,6 +1107,37 @@ mod tests {
         let out = rows("sequenceDiagram\n A->>B: ask\n B-->>A: answer\n");
         let reply = out.iter().find(|r| r.contains('◀')).unwrap();
         assert!(reply.ends_with('┤'), "{reply:?}");
+    }
+
+    #[test]
+    fn a_right_to_left_chart_points_its_arrow_at_the_target() {
+        // Mermaid puts A on the right and B on the left, with the arrow into
+        // B. Turning the edge round to place the ranks got the boxes right and
+        // the one thing a diagram says — which way it goes — wrong.
+        let out = rows("flowchart RL\n A --> B\n");
+        let row = out
+            .iter()
+            .find(|r| r.contains('◀') || r.contains('▶'))
+            .unwrap();
+        assert!(!row.contains('▶'), "the arrow points at B, not A: {row:?}");
+        assert!(row.find('B') < row.find('A'), "{row:?}");
+    }
+
+    #[test]
+    fn a_bottom_to_top_chart_points_its_arrow_upwards() {
+        let out = rows("flowchart BT\n A --> B\n");
+        let text = out.join("\n");
+        assert!(text.contains('▲'), "{text}");
+        assert!(!text.contains('▼'), "{text}");
+        assert!(text.find('B') < text.find('A'), "B is on top: {text}");
+    }
+
+    #[test]
+    fn a_top_down_chart_still_points_downwards() {
+        let out = rows("flowchart TD\n A --> B\n A --> C\n");
+        let text = out.join("\n");
+        assert_eq!(text.matches('▼').count(), 2, "one head per edge: {text}");
+        assert!(!text.contains('▲'), "{text}");
     }
 
     #[test]
