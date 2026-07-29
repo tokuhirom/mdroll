@@ -15,7 +15,7 @@ use crate::screen::Screen;
 use crate::theme::{self, Theme};
 use crate::width::WidthCalc;
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, channel};
@@ -1237,6 +1237,11 @@ impl App {
         self.keymap.keys_for(Action::Help).into_iter().next()
     }
 
+    /// The key that leaves, on the same terms as [`App::help_key`].
+    fn quit_key(&self) -> Option<String> {
+        self.keymap.keys_for(Action::Quit).into_iter().next()
+    }
+
     /// Contents of the bottom row: the prompt while searching, a toast if one
     /// is live, the status line if it is enabled, and otherwise nothing.
     pub fn bottom_row(&self) -> Vec<Span> {
@@ -1448,8 +1453,21 @@ impl App {
             // from a viewer that has stopped responding, and it is the moment
             // a reader is most likely to want the list of keys that do work.
             let name = crate::keys::describe_key(&key);
-            match self.help_key() {
-                Some(help) => self.toast(&format!("{name} does nothing — {help} for help")),
+            // Except for `Ctrl-C`, which is not a plea for the list of keys.
+            // Raw mode takes the signal away, so it arrives here as a key
+            // like any other, and it is pressed by someone who believes the
+            // program has hung and wants out. Naming the way out answers
+            // that; quitting on it would be a second binding for `q` that
+            // the keymap does not know about, and one no other pager has.
+            let remedy = if key.code == KeyCode::Char('c')
+                && key.modifiers.contains(KeyModifiers::CONTROL)
+            {
+                self.quit_key().map(|quit| format!("{quit} to quit"))
+            } else {
+                self.help_key().map(|help| format!("{help} for help"))
+            };
+            match remedy {
+                Some(remedy) => self.toast(&format!("{name} does nothing — {remedy}")),
                 None => self.toast(&format!("{name} does nothing")),
             }
             return Ok(());
@@ -2272,6 +2290,23 @@ mod tests {
             text.contains('x') && text.contains('H'),
             "silence reads as a viewer that has stopped responding: {text:?}"
         );
+    }
+
+    #[test]
+    fn ctrl_c_is_told_the_way_out_rather_than_the_way_to_the_help() {
+        // Raw mode means it arrives as a key, and it is pressed by someone
+        // who thinks the program has hung. The list of keys is not what they
+        // are after.
+        let mut a = app("body\n");
+        let mut sink = Vec::new();
+        a.on_key(
+            &mut sink,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        )
+        .unwrap();
+        let text: String = a.bottom_row().iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(text, " Ctrl-c does nothing — q to quit ");
+        assert!(!a.quit, "saying where the exit is is not taking it");
     }
 
     #[test]
