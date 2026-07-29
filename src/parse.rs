@@ -772,7 +772,12 @@ impl<'t> Builder<'t> {
                 out.push(Span::new(code.literal.clone(), style.patch(theme.code)).with_link(link));
             }
             NodeValue::Math(math) => {
-                out.push(Span::new(math.literal.clone(), style.patch(theme.code)).with_link(link));
+                // A terminal cannot typeset, so the LaTeX source is what there
+                // is to show. `$$...$$` keeps the newlines that surrounded it
+                // inside the literal, and those would lay out as a blank row
+                // above and below the formula.
+                let literal = math.literal.trim_matches('\n');
+                out.push(Span::new(literal.to_string(), style.patch(theme.code)).with_link(link));
             }
             // `:rocket:` resolved to 🚀. Unresolvable codes never become this
             // node in the first place, so they stay as the text they were.

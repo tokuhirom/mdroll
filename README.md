@@ -760,7 +760,7 @@ issue tracker nobody reads.
 - [x] Nothing ever expires from `~/.cache/mdroll`, so a badge whose image
       changes stays pinned to the first version fetched, with no way to refresh
       it short of deleting the directory by hand.
-- [ ] A `$$...$$` block leaves a blank row above and below it.
+- [x] A `$$...$$` block leaves a blank row above and below it.
 
 ### Beyond
 
