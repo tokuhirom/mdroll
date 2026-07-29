@@ -105,10 +105,21 @@ impl WidthCalc {
 }
 
 /// Expand hard tabs to the next multiple of [`TAB_STOP`].
+///
+/// The column count is display width, not characters: a tab after `日` advances
+/// from column two, not column one, and counting characters would put every
+/// tab stop on a line of CJK text one column further left than the terminal
+/// puts it.
+///
+/// Ambiguous-width characters are measured narrow here, because this runs while
+/// the document is parsed and the setting belongs to the viewer. A line that
+/// mixes tabs with `─` can therefore be off by one; a line that mixes tabs with
+/// kanji, which is the common case, is not.
 pub fn expand_tabs(s: &str) -> String {
     if !s.contains('\t') {
         return s.to_string();
     }
+    let calc = WidthCalc::default();
     let mut out = String::with_capacity(s.len());
     let mut col = 0usize;
     for c in s.chars() {
@@ -118,7 +129,7 @@ pub fn expand_tabs(s: &str) -> String {
             col += n;
         } else {
             out.push(c);
-            col += 1;
+            col += calc.ch(c);
         }
     }
     out
@@ -200,5 +211,16 @@ mod tests {
         assert_eq!(expand_tabs("\tx"), "    x");
         assert_eq!(expand_tabs("ab\tx"), "ab  x");
         assert_eq!(expand_tabs("abcd\tx"), "abcd    x");
+    }
+
+    #[test]
+    fn a_tab_stop_is_counted_in_columns_not_characters() {
+        // `日` is two columns, so the tab after it advances from column two.
+        // Counting characters would emit three spaces and put everything after
+        // it one column right of where the terminal draws it.
+        assert_eq!(expand_tabs("日\tx"), "日  x");
+        assert_eq!(NARROW.str(&expand_tabs("日\tx")), NARROW.str("abcd") + 1);
+        // A zero-width mark does not advance the stop either.
+        assert_eq!(expand_tabs("か\u{3099}\tx"), "か\u{3099}  x");
     }
 }
