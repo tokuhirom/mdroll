@@ -566,14 +566,101 @@ pub fn draw_flowchart(chart: &Flowchart, calc: &WidthCalc) -> Option<Vec<String>
     // so a diagram that came out one way yesterday comes out the same way
     // today. Reordering a rank is a repair for a band whose runs would say
     // more than the document does, not a policy applied to every chart.
-    if !bus_runs_are_honest(chart, &rank, |i| across(&by_rank)[i]) {
-        by_rank = untangle(chart, &rank, &by_rank, &across)?;
+    let mut diverted: Vec<usize> = Vec::new();
+    if !bus_runs_are_honest(chart, &rank, &diverted, |i| across(&by_rank)[i]) {
+        let orders = untangled(chart, &rank, &by_rank);
+        // A plain drawing beats a routed one, so every order is tried on its
+        // own before any of them is allowed to send an edge round the outside.
+        let honest = |order: &[Vec<usize>], out: &[usize]| {
+            let centres = across(order);
+            bus_runs_are_honest(chart, &rank, out, |i| centres[i])
+        };
+        let found = orders
+            .iter()
+            .find(|order| honest(order, &[]))
+            .map(|order| (order.clone(), Vec::new()))
+            .or_else(|| {
+                orders.iter().find_map(|order| {
+                    let centres = across(order);
+                    divert(chart, &rank, order, &centres).map(|d| (order.clone(), d))
+                })
+            })?;
+        (by_rank, diverted) = found;
     }
 
     match chart.direction {
-        Direction::TopDown => draw_top_down(chart, &by_rank, &rank, calc, box_w),
-        Direction::LeftRight => draw_left_right(chart, &by_rank, &rank, calc, box_w),
+        Direction::TopDown => draw_top_down(chart, &by_rank, &rank, &diverted, calc, box_w),
+        Direction::LeftRight => draw_left_right(chart, &by_rank, &rank, &diverted, calc, box_w),
     }
+}
+
+/// Which edges to take out of their band and route round the outside.
+///
+/// A band that no order untangles has two parents whose children overlap
+/// without being the same set, and the run they share offers the pairs neither
+/// of them wrote. Nothing about the *bus* can be fixed — but an edge does not
+/// have to be on it. Taken out to a lane of its own, the way an edge that skips
+/// a rank already is, it leaves a band the remaining edges can say honestly and
+/// carries its own label where nothing else can reach it.
+///
+/// The fewest edges that do it, and among those the ones that break up the
+/// fewest fans: a parent with one edge in the band loses nothing by having it
+/// routed round, and a parent with four would lose the shape that makes it
+/// readable.
+fn divert(
+    chart: &Flowchart,
+    rank: &[usize],
+    by_rank: &[Vec<usize>],
+    centres: &[usize],
+) -> Option<Vec<usize>> {
+    // The lane is out past the far end of every rank, and a run reaching it
+    // passes behind whatever boxes stand between. An edge that skips a rank
+    // gets away with that because the boxes it hides behind belong to ranks it
+    // has nothing to do with; an edge taken off its own band does not, and the
+    // route came out of hiding beside the box next door and read as that box's
+    // edge — `│ C │◀──│ D │─┘` for something that starts at `B`. Only an edge
+    // whose two ends are the last boxes of their ranks has a road that is
+    // clear the whole way.
+    let clear = |i: usize| {
+        let e = &chart.edges[i];
+        [e.from, e.to]
+            .iter()
+            .all(|&n| by_rank[rank[n]].last() == Some(&n))
+    };
+    let mut band: Vec<usize> = (0..chart.edges.len())
+        .filter(|i| {
+            let e = &chart.edges[*i];
+            rank[e.to] == rank[e.from] + 1
+        })
+        .collect();
+    // Searching pairs is quadratic in a band's edges and the check inside is
+    // quadratic again; a chart big enough for that to matter is past what
+    // anyone reads in a terminal.
+    if band.len() > 24 {
+        return None;
+    }
+    let mut fan = vec![0usize; chart.nodes.len()];
+    for &i in &band {
+        fan[chart.edges[i].from] += 1;
+    }
+    band.sort_by_key(|i| fan[chart.edges[*i].from]);
+
+    band.retain(|i| clear(*i));
+
+    let honest = |out: &[usize]| bus_runs_are_honest(chart, rank, out, |i| centres[i]);
+    for &i in &band {
+        if honest(&[i]) {
+            return Some(vec![i]);
+        }
+    }
+    for (n, &i) in band.iter().enumerate() {
+        for &j in &band[n + 1..] {
+            if honest(&[i, j]) {
+                return Some(vec![i, j]);
+            }
+        }
+    }
+    None
 }
 
 /// Where each box starts across the canvas, and how wide the widest rank is.
@@ -637,16 +724,13 @@ fn row_starts(by_rank: &[Vec<usize>], nodes: usize) -> (Vec<usize>, usize) {
 /// Whether it worked is not assumed. Some bands are tangled by the graph and
 /// not by the order — several parents reaching an overlapping set of children
 /// is one no sweep can separate — and there the chart is declined as before.
-fn untangle(
-    chart: &Flowchart,
-    rank: &[usize],
-    by_rank: &[Vec<usize>],
-    across: &impl Fn(&[Vec<usize>]) -> Vec<usize>,
-) -> Option<Vec<Vec<usize>>> {
+fn untangled(chart: &Flowchart, rank: &[usize], by_rank: &[Vec<usize>]) -> Vec<Vec<Vec<usize>>> {
+    // The order in the document comes first, so it is what a chart is drawn in
+    // whenever it can be. Then down, then back up, then down again: one pass
+    // settles the common case, and the return passes catch a rank whose own
+    // order was what put the one after it wrong.
+    let mut orders = vec![by_rank.to_vec()];
     let mut order = by_rank.to_vec();
-    // Down, then back up, then down again: one pass settles the common case,
-    // and the return passes catch a rank whose own order was what put the one
-    // after it wrong.
     for pass in 0..3 {
         if pass % 2 == 0 {
             for r in 1..order.len() {
@@ -657,12 +741,11 @@ fn untangle(
                 sort_by_neighbours(chart, rank, &mut order, r, false);
             }
         }
-        let centres = across(&order);
-        if bus_runs_are_honest(chart, rank, |i| centres[i]) {
-            return Some(order);
+        if !orders.contains(&order) {
+            orders.push(order.clone());
         }
     }
-    None
+    orders
 }
 
 /// Order one rank by where each of its nodes' neighbours in the next rank up
@@ -709,6 +792,8 @@ fn draw_top_down(
     chart: &Flowchart,
     by_rank: &[Vec<usize>],
     rank: &[usize],
+    // Edges taken off their band and routed round the outside instead.
+    diverted: &[usize],
     calc: &WidthCalc,
     box_w: impl Fn(usize) -> usize,
 ) -> Option<Vec<String>> {
@@ -716,13 +801,19 @@ fn draw_top_down(
     let (starts, content_width) = column_starts(by_rank, chart.nodes.len(), &box_w);
 
     // Edges that skip a rank get their own lane to the right of every box, so
-    // a long connector never has to cross a node.
+    // a long connector never has to cross a node. An edge taken off its band
+    // takes the same road: it is the one place on the canvas that belongs to
+    // one edge and to nothing else.
     let long_edges: Vec<usize> = (0..chart.edges.len())
         .filter(|i| {
             let e = &chart.edges[*i];
-            rank[e.to] > rank[e.from] + 1
+            rank[e.to] > rank[e.from] + 1 || diverted.contains(i)
         })
         .collect();
+    let on_band = |i: usize| {
+        let e = &chart.edges[i];
+        rank[e.to] == rank[e.from] + 1 && !diverted.contains(&i)
+    };
 
     // Columns first. Where a box sits across the canvas does not depend on how
     // tall the bands between the ranks turn out to be, and the bands cannot be
@@ -741,8 +832,8 @@ fn draw_top_down(
     // what say which one that is.
     let mut parents = vec![0usize; chart.nodes.len()];
     let mut children = vec![0usize; chart.nodes.len()];
-    for edge in &chart.edges {
-        if rank[edge.to] == rank[edge.from] + 1 {
+    for (i, edge) in chart.edges.iter().enumerate() {
+        if on_band(i) {
             parents[edge.to] += 1;
             children[edge.from] += 1;
         }
@@ -752,9 +843,9 @@ fn draw_top_down(
     // the edge, and needs room there. Nothing accounted for it, so a label wide
     // enough ran off the right of the canvas and was cut off mid-word.
     let (mut margin, mut extent) = (0usize, 0usize);
-    for edge in &chart.edges {
+    for (i, edge) in chart.edges.iter().enumerate() {
         let Some(label) = &edge.label else { continue };
-        if rank[edge.to] != rank[edge.from] + 1 {
+        if !on_band(i) {
             continue;
         }
         let w = calc.str(label);
@@ -774,7 +865,7 @@ fn draw_top_down(
     // both ends of every edge are shared and there is no column left that would
     // tell the labels apart, so the row is what has to give: a label that will
     // not fit beside the ones already placed goes on the row above.
-    let level = label_levels(chart, &boxes, rank, &parents, &children, calc);
+    let level = label_levels(chart, &boxes, rank, diverted, &parents, &children, calc);
 
     let mut y = 0usize;
     for (r, nodes) in by_rank.iter().enumerate() {
@@ -790,7 +881,7 @@ fn draw_top_down(
                 .edges
                 .iter()
                 .enumerate()
-                .filter(|(_, e)| rank[e.from] == r && rank[e.to] == r + 1)
+                .filter(|(i, e)| rank[e.from] == r && rank[e.to] == r + 1 && on_band(*i))
                 .map(|(i, _)| level[i])
                 .max()
                 .unwrap_or(0);
@@ -822,10 +913,7 @@ fn draw_top_down(
     // the bus meets the parent has to know about all of them at once.
     for parent in 0..chart.nodes.len() {
         let fan: Vec<usize> = (0..chart.edges.len())
-            .filter(|i| {
-                let e = &chart.edges[*i];
-                e.from == parent && rank[e.to] == rank[parent] + 1
-            })
+            .filter(|i| chart.edges[*i].from == parent && on_band(*i))
             .collect();
         if !fan.is_empty() {
             fan_out(
@@ -842,8 +930,7 @@ fn draw_top_down(
         }
     }
     for (i, edge) in chart.edges.iter().enumerate() {
-        if rank[edge.to] > rank[edge.from] + 1 {
-            let nth = long_edges.iter().position(|j| *j == i).unwrap_or(0);
+        if let Some(nth) = long_edges.iter().position(|j| *j == i) {
             route_lane(
                 &mut grid,
                 &boxes[edge.from],
@@ -865,6 +952,8 @@ fn draw_left_right(
     chart: &Flowchart,
     by_rank: &[Vec<usize>],
     rank: &[usize],
+    // Edges taken off their band and routed round the outside instead.
+    diverted: &[usize],
     calc: &WidthCalc,
     box_w: impl Fn(usize) -> usize,
 ) -> Option<Vec<String>> {
@@ -879,8 +968,14 @@ fn draw_left_right(
     // run at the boxes in between, and since a connector is only drawn where
     // the canvas is still blank, it disappeared behind them instead.
     let long_edges: Vec<usize> = (0..chart.edges.len())
-        .filter(|i| rank[chart.edges[*i].to] > rank[chart.edges[*i].from] + 1)
+        .filter(|i| {
+            rank[chart.edges[*i].to] > rank[chart.edges[*i].from] + 1 || diverted.contains(i)
+        })
         .collect();
+    let on_band = |i: usize| {
+        let e = &chart.edges[i];
+        rank[e.to] == rank[e.from] + 1 && !diverted.contains(&i)
+    };
     let lanes = if long_edges.is_empty() {
         0
     } else {
@@ -904,8 +999,8 @@ fn draw_left_right(
     // which end of its run a label can hang at without meeting another.
     let mut parents = vec![0usize; chart.nodes.len()];
     let mut children = vec![0usize; chart.nodes.len()];
-    for edge in &chart.edges {
-        if rank[edge.to] == rank[edge.from] + 1 {
+    for (i, edge) in chart.edges.iter().enumerate() {
+        if on_band(i) {
             parents[edge.to] += 1;
             children[edge.from] += 1;
         }
@@ -928,7 +1023,7 @@ fn draw_left_right(
     let mut rows: Vec<(usize, usize, bool, usize)> = Vec::new();
     for (i, edge) in chart.edges.iter().enumerate() {
         let Some(label) = &edge.label else { continue };
-        if rank[edge.to] != rank[edge.from] + 1 {
+        if !on_band(i) {
             continue;
         }
         let band = rank[edge.from];
@@ -1012,7 +1107,7 @@ fn draw_left_right(
         draw_box(&mut grid, &boxes[i], &node.label, &node.shape, calc);
     }
     for (i, edge) in chart.edges.iter().enumerate() {
-        if rank[edge.to] == rank[edge.from] + 1 {
+        if on_band(i) {
             connect_right(
                 &mut grid,
                 &boxes[edge.from],
@@ -1114,7 +1209,12 @@ fn draw_box(grid: &mut Grid, b: &Box, label: &str, shape: &Shape, calc: &WidthCa
 /// for; where two boxes of a rank differ in width the bends land a column or
 /// two apart, and a chart declined for overlapping there was one whose
 /// connectors ran through each other's corners anyway.
-fn bus_runs_are_honest(chart: &Flowchart, rank: &[usize], across: impl Fn(usize) -> usize) -> bool {
+fn bus_runs_are_honest(
+    chart: &Flowchart,
+    rank: &[usize],
+    diverted: &[usize],
+    across: impl Fn(usize) -> usize,
+) -> bool {
     let last = rank.iter().copied().max().unwrap_or(0);
     for band in 0..last {
         // One run per edge, spanning between its two ends. A parent's bus is
@@ -1123,8 +1223,11 @@ fn bus_runs_are_honest(chart: &Flowchart, rank: &[usize], across: impl Fn(usize)
         let mut runs: Vec<(usize, usize, Vec<usize>, Vec<usize>)> = chart
             .edges
             .iter()
-            .filter(|e| rank[e.from] == band && rank[e.to] == band + 1)
-            .map(|e| {
+            .enumerate()
+            .filter(|(i, e)| {
+                rank[e.from] == band && rank[e.to] == band + 1 && !diverted.contains(i)
+            })
+            .map(|(_, e)| {
                 let (f, t) = (across(e.from), across(e.to));
                 (f.min(t), f.max(t), vec![e.from], vec![e.to])
             })
@@ -1177,6 +1280,7 @@ fn label_levels(
     chart: &Flowchart,
     boxes: &[Box],
     rank: &[usize],
+    diverted: &[usize],
     parents: &[usize],
     children: &[usize],
     calc: &WidthCalc,
@@ -1187,7 +1291,7 @@ fn label_levels(
 
     for (i, edge) in chart.edges.iter().enumerate() {
         let Some(label) = &edge.label else { continue };
-        if rank[edge.to] != rank[edge.from] + 1 {
+        if rank[edge.to] != rank[edge.from] + 1 || diverted.contains(&i) {
             continue;
         }
         let w = calc.str(label) as isize;
@@ -2370,21 +2474,67 @@ mod tests {
     }
 
     #[test]
-    fn a_band_offering_a_connection_nobody_wrote_is_declined_rather_than_drawn() {
-        // Declining hands the chart to `mmdc` or shows the source. Drawing a
-        // fourth edge does neither, and says nothing about which one it is.
+    fn an_edge_a_band_cannot_carry_is_routed_round_it_rather_than_declined() {
+        // The run cannot say these three edges without offering the fourth,
+        // and no order changes that: the two parents meet at the child they
+        // share. Taking one edge off the band and out to a lane of its own —
+        // the road an edge that skips a rank already takes — leaves a band the
+        // rest can say honestly, and gives that edge a run nothing else is on.
         for dir in ["TD", "LR", "BT", "RL"] {
             for code in [
                 format!("flowchart {dir}\n A --> C\n A --> D\n B --> C\n"),
                 format!("flowchart {dir}\n A --> C\n A --> D\n B --> D\n"),
                 format!("flowchart {dir}\n A --> C\n B --> C\n B --> D\n"),
-                // Three boxes reaching two between them: the run says six
-                // connections where four were written.
-                format!("flowchart {dir}\n Z --> C\n Z --> D\n A --> D\n B --> C\n"),
             ] {
-                assert!(render(&code, &CALC).is_none(), "drawn anyway:\n{code}");
+                assert!(render(&code, &CALC).is_some(), "declined:\n{code}");
             }
         }
+    }
+
+    #[test]
+    fn a_routed_edge_is_given_a_road_clear_of_every_box() {
+        // A lane is out past the far end of every rank, and the run reaching
+        // it passes behind whatever boxes stand between. That is fair enough
+        // for an edge skipping a rank, which hides behind boxes it has nothing
+        // to do with; an edge taken off its own band came out of hiding beside
+        // the box next door and read as that box's edge — `│ C │◀──│ D │─┘`
+        // for a run that starts at `B`. So the rank is ordered to put both of
+        // its ends last, and where that cannot be had the chart is declined.
+        let out = rows("flowchart TD\n A --> C\n A --> D\n B --> C\n");
+        let row = row_of(&out, "│ C │");
+        assert!(
+            row.find("│ D │") < row.find("│ C │"),
+            "C is not the last box of its rank: {row:?}\n{}",
+            out.join("\n")
+        );
+
+        // `Z`, `A` and `B` all reach the pair below them, so whichever edge
+        // were taken out would have a box beside it whichever way round they
+        // are put.
+        for dir in ["TD", "LR", "BT", "RL"] {
+            let code = format!("flowchart {dir}\n Z --> C\n Z --> D\n A --> D\n B --> C\n");
+            assert!(render(&code, &CALC).is_none(), "drawn anyway:\n{code}");
+        }
+    }
+
+    #[test]
+    fn a_routed_edge_keeps_its_label_and_leaves_the_others_theirs() {
+        // Written on the band all three shared one row and the second was set
+        // down over the first. The one taken out carries its label beside its
+        // own run, where nothing else on the canvas can reach it.
+        let out = rows("flowchart TD\n A -->|ac| C\n A -->|ad| D\n B -->|bc| C\n");
+        let joined = out.join("\n");
+        for label in ["ac", "ad", "bc"] {
+            assert!(joined.contains(label), "{label} lost:\n{joined}");
+        }
+        let lane = out
+            .iter()
+            .find(|r| r.contains("bc"))
+            .unwrap_or_else(|| panic!("{joined}"));
+        assert!(
+            !lane.contains("│ A │") && !lane.contains("│ B │"),
+            "the routed label is still on the band: {lane:?}\n{joined}"
+        );
     }
 
     #[test]

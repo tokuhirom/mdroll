@@ -365,6 +365,32 @@ is what stops a chart being drawn, the ranks are reordered until it can be.
 The order in the document is preferred and kept whenever it works, so a diagram
 that came out one way yesterday comes out the same way today.
 
+Where no order helps — two parents meeting at a child they share, as above —
+an edge is taken off the band and routed round the outside instead, on the same
+lane an edge that skips a rank uses. The band is then left with edges its run
+can say, and the routed edge has a run nothing else is on, which is also
+somewhere its label unambiguously belongs:
+
+```text
+A -->|ac| C     ┌───┐   ┌───┐
+A -->|ad| D     │ A │   │ B │
+B -->|bc| C     └───┘   └───┘─┐
+               ad │        ac │
+                  ├───────┐   │bc
+                  ▼       ▼   │
+                ┌───┐   ┌───┐ │
+                │ D │   │ C │◀┘
+                └───┘   └───┘
+```
+
+A lane runs past the far end of every rank, so a run reaching it passes behind
+whatever boxes stand between. An edge that skips a rank gets away with that,
+because the boxes it hides behind belong to ranks it has nothing to do with; an
+edge taken off its own band does not, and would come out of hiding beside the
+box next door and read as that box's edge. Hence `C` above being moved to the
+end of its rank. Where both ends cannot be given a road that is clear, the chart
+is declined.
+
 ```console
 $ mise use -g npm:@mermaid-js/mermaid-cli
 $ npx puppeteer browsers install chrome-headless-shell
@@ -1102,13 +1128,27 @@ the edges, and sometimes there is an edge in the picture that nobody wrote.
       chart whose run would say more than the document does is the smallest
       honest answer, and it is what the renderer already does with everything
       else it cannot model.
-- [ ] Declining is what this renderer can do about it, not what it should do.
+- [x] Declining is what this renderer can do about it, not what it should do.
       A band that will not fit one run would fit two, given each parent a run of
       its own and columns chosen so that no parent's connector has to cross
       another's run — which is layout proper, rather than centring each rank and
       putting every bend in one place. That is also the only thing that would
       let a label belong to one edge and not the other, which is the v1.5 item
-      above.
+      above. What it took in the end was not a second run in the band but a run
+      *outside* it: the lane an edge that skips a rank already uses, which is
+      the one place on the canvas that belongs to one edge and to nothing else,
+      and where its label therefore belongs to it too. The v1.5 case is not all
+      of the way home — where every connection was written the run is honest
+      and stays shared, and the labels on it are still side by side.
+- [ ] The road out is only clear when both ends of the routed edge are the last
+      boxes of their ranks, because a run reaching the lane passes behind
+      whatever stands between and comes out of hiding as the next box's edge.
+      A band with three parents over two children has no such edge and is still
+      declined. Widening the canvas to give the run a column of its own, rather
+      than borrowing the space behind the boxes, would reach those too.
+- [ ] Two lanes crossing are joined into a `┼`, which says the two edges meet.
+      They do not, and this has been true since lanes were added; it is the one
+      place left where a line is drawn through another and claims to touch it.
 - [x] Ordering within a rank is the order the edges were written in, so two
       runs can interleave when nothing about the graph makes them. `A --> D`
       then `B --> C`, where `C` and `D` were already introduced in the other
