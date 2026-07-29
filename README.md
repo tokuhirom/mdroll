@@ -812,7 +812,7 @@ that declining beats drawing something subtly wrong.
 - [x] Attribute parsing steps over a byte it cannot make sense of, which lands
       inside a multi-byte character and panics on the next name it reads. Both
       `<p 幅="3">` and the text `a<b は c` inside an HTML block reach it.
-- [ ] `flowchart RL` and `BT` reverse every *edge* instead of the layout, so
+- [x] `flowchart RL` and `BT` reverse every *edge* instead of the layout, so
       `A --> B` is drawn as an arrow pointing at `A`. The one thing a diagram
       says is which way its arrows point.
 - [ ] A statement ending in `;`, which mermaid's own documentation writes,
