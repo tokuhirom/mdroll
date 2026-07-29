@@ -95,7 +95,17 @@ fn real_main() -> Result<()> {
     if piped {
         return dump(&mut app);
     }
-    run(&mut app)
+    run(&mut app)?;
+
+    // Said on the way out rather than in a toast: it is a fact about the
+    // machine and not about the document, it would be the same on every frame,
+    // and a reader who has decided not to install `mmdc` should not have to
+    // look at it for a whole session. stderr, so `mdroll doc.md 2>/dev/null`
+    // is all it takes to never see it again.
+    if app.mmdc_wanted > 0 {
+        eprint!("{}", mmdc_notice(app.mmdc_wanted));
+    }
+    Ok(())
 }
 
 /// Write the entire rendered document to stdout and return.
@@ -360,6 +370,27 @@ fn edit<W: Write>(
     Ok(())
 }
 
+/// What to say about `mmdc` on the way out, when a diagram wanted it.
+///
+/// Mode-neutral on purpose: in the default mode the reader was shown the source
+/// of the diagram, and under `--mermaid image` a box drawing where a picture was
+/// asked for. Either way what happened is that a picture was not available, and
+/// the two commands are what makes one.
+fn mmdc_notice(count: usize) -> String {
+    let (plural, them) = if count == 1 {
+        ("", "it")
+    } else {
+        ("s", "them")
+    };
+    format!(
+        "mdroll: {count} diagram{plural} could not be drawn as a picture \
+         — mmdc is not installed.\n\
+         To draw {them}:\n  \
+         mise use -g npm:@mermaid-js/mermaid-cli\n  \
+         npx puppeteer browsers install chrome-headless-shell\n"
+    )
+}
+
 fn run(app: &mut App) -> Result<()> {
     let terminal = Terminal::enter(app.settings.mouse)?;
     let mut renderer = Renderer::new(app.calc());
@@ -441,6 +472,22 @@ mod tests {
             .chain(command.get_args())
             .map(|s| s.to_string_lossy().into_owned())
             .collect()
+    }
+
+    #[test]
+    fn the_mmdc_notice_counts_what_it_is_about() {
+        // Read on the way out of a full-screen program, so it has to say what
+        // it is about without the diagram still being on screen.
+        let one = mmdc_notice(1);
+        assert!(one.contains("1 diagram could not"), "{one}");
+        assert!(one.contains("To draw it:"), "{one}");
+        let many = mmdc_notice(3);
+        assert!(many.contains("3 diagrams could not"), "{many}");
+        assert!(many.contains("To draw them:"), "{many}");
+        // The two commands are the point of saying anything at all.
+        assert!(many.contains("npm:@mermaid-js/mermaid-cli"), "{many}");
+        assert!(many.contains("chrome-headless-shell"), "{many}");
+        assert!(many.ends_with('\n'), "{many:?}");
     }
 
     #[test]

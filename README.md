@@ -401,6 +401,23 @@ pictures. Without it they show as source. `--mermaid image` forces the picture
 path even for diagrams box drawings could handle; `--mermaid text` never runs
 `mmdc` at all.
 
+When a document had a diagram that only `mmdc` could have drawn and `mmdc` is
+not installed, `mdroll` says so on stderr as it exits:
+
+```console
+mdroll: 1 diagram could not be drawn as a picture — mmdc is not installed.
+To draw it:
+  mise use -g npm:@mermaid-js/mermaid-cli
+  npx puppeteer browsers install chrome-headless-shell
+```
+
+On the way out rather than in a toast, because it is a fact about the machine
+and not about the document, and a reader who has decided against `mmdc` should
+not have it in front of them all session. Nothing is said when the box drawings
+covered every diagram, when the terminal has no graphics, or when `--mermaid
+text` or `--no-images` already said no picture was wanted — in all of those,
+installing anything would change nothing. `2>/dev/null` silences it for good.
+
 Rendering happens on a worker thread, because starting a browser takes long
 enough to feel, and results are cached under `~/.cache/mdroll/mermaid` keyed by
 the diagram's content. The box drawings or the source appear immediately and the

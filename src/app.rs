@@ -120,6 +120,9 @@ pub struct App {
 
     /// Diagrams being rendered by `mmdc` on a worker thread.
     diagrams: Option<Receiver<Diagram>>,
+    /// How many diagrams this session would have drawn as pictures if `mmdc`
+    /// were installed. Reported once on the way out; see [`App::prepare_diagrams`].
+    pub mmdc_wanted: usize,
     /// Images being fetched over the network by worker threads.
     downloads: Option<Receiver<Fetched>>,
     /// Bumped on every reparse, so results for a document that has since been
@@ -227,6 +230,7 @@ impl App {
             raster_headings: graphics.raster_headings,
             edit_request: None,
             diagrams: None,
+            mmdc_wanted: 0,
             downloads: None,
             generation: 0,
             images: {
@@ -266,25 +270,16 @@ impl App {
         }
     }
 
-    /// Hand any mermaid block that needs `mmdc` to a worker thread.
+    /// The mermaid blocks in this document that only `mmdc` can draw.
     ///
-    /// Launching a browser takes long enough to be felt, so it never happens on
-    /// the UI thread; the box-drawing render or the source shows immediately
-    /// and the picture replaces it when it arrives.
-    pub fn prepare_diagrams(&mut self) {
-        self.diagrams = None;
-        if self.settings.mermaid == MermaidMode::Text
-            || !self.settings.images
-            || !self.graphics.available()
-            || !crate::mmdc::available()
-        {
-            return;
-        }
-
+    /// In the default mode those are the ones the box renderer declines and the
+    /// ones whose drawing is wider than the screen, both of which the reader is
+    /// shown as source instead. `--mermaid image` asks for a picture of every
+    /// diagram, box-drawable or not.
+    fn diagrams_for_mmdc(&self) -> Vec<(usize, String)> {
         let width = self.screen.viewport().cols as usize;
         let calc = self.calc();
-        let jobs: Vec<(usize, String)> = self
-            .doc
+        self.doc
             .blocks
             .iter()
             .enumerate()
@@ -302,8 +297,38 @@ impl App {
                 },
             })
             .map(|(i, b)| (i, b.text()))
-            .collect();
+            .collect()
+    }
+
+    /// Hand any mermaid block that needs `mmdc` to a worker thread.
+    ///
+    /// Launching a browser takes long enough to be felt, so it never happens on
+    /// the UI thread; the box-drawing render or the source shows immediately
+    /// and the picture replaces it when it arrives.
+    ///
+    /// Where `mmdc` is missing there is nothing to hand over, and the count is
+    /// kept instead so the reader can be told on the way out. Only here: this
+    /// is the one place that knows a diagram was shown as source *and* that a
+    /// picture was possible — with no graphics, or with images or `mmdc` turned
+    /// off, installing anything would change nothing and saying so is noise.
+    pub fn prepare_diagrams(&mut self) {
+        self.diagrams = None;
+        if self.settings.mermaid == MermaidMode::Text
+            || !self.settings.images
+            || !self.graphics.available()
+        {
+            return;
+        }
+
+        let jobs = self.diagrams_for_mmdc();
         if jobs.is_empty() {
+            return;
+        }
+        if !crate::mmdc::available() {
+            // Kept rather than replaced: a diagram shown as source is worth
+            // mentioning even if the window was later resized until the next
+            // one fitted.
+            self.mmdc_wanted = self.mmdc_wanted.max(jobs.len());
             return;
         }
 
@@ -1645,6 +1670,51 @@ mod tests {
             Screen::new(40, 10),
             GraphicsInfo::disabled(),
         )
+    }
+
+    #[test]
+    fn only_the_diagrams_the_box_renderer_cannot_draw_are_asked_of_mmdc() {
+        // Launching a browser costs a second or two, so a flowchart the box
+        // renderer draws is never sent — and one it declines always is, because
+        // the reader is looking at the source of it otherwise.
+        let app = app("```mermaid\nflowchart TD\n A --> B\n```\n\n\
+             ```mermaid\nflowchart TD\n Z --> C\n Z --> D\n A --> D\n B --> C\n```\n");
+        let jobs = app.diagrams_for_mmdc();
+        assert_eq!(jobs.len(), 1, "{jobs:?}");
+        assert!(jobs[0].1.contains("Z --> C"), "the wrong one: {jobs:?}");
+    }
+
+    #[test]
+    fn a_document_with_no_diagram_asks_nothing_of_mmdc() {
+        // Nothing to say on the way out about a tool this document has no use
+        // for, whether or not it is installed.
+        let app = app("# Title\n\nSome prose.\n\n```rust\nfn main() {}\n```\n");
+        assert!(app.diagrams_for_mmdc().is_empty());
+        assert_eq!(app.mmdc_wanted, 0);
+    }
+
+    #[test]
+    fn a_drawable_diagram_is_not_a_reason_to_mention_mmdc() {
+        // The notice on the way out is for a reader who lost something. A
+        // flowchart drawn as box characters is not lost — it is selectable
+        // text into the bargain — so nothing is asked of `mmdc` for it and
+        // there is nothing to say about `mmdc` afterwards.
+        let app = app("```mermaid\nflowchart TD\n A --> B\n```\n");
+        assert!(app.diagrams_for_mmdc().is_empty());
+        assert_eq!(app.mmdc_wanted, 0);
+    }
+
+    #[test]
+    fn a_diagram_too_wide_for_the_screen_is_asked_of_mmdc_after_all() {
+        // Drawn, but not at a size that fits: there is nothing sensible to
+        // reflow in a diagram, so the reader is shown the source of this one
+        // too and a picture would have been the better answer.
+        let wide = (0..12)
+            .map(|i| format!(" A --> Node{i}[a rather long label]"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let app = app(&format!("```mermaid\nflowchart TD\n{wide}\n```\n"));
+        assert_eq!(app.diagrams_for_mmdc().len(), 1);
     }
 
     fn key(c: char) -> KeyEvent {
