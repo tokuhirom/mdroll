@@ -994,11 +994,16 @@ impl App {
         if let Some(line) = url.strip_prefix("#line-")
             && let Ok(line) = line.parse::<usize>()
         {
-            self.toc = false;
-            self.help = false;
-            self.cursor = None;
-            self.relayout();
-            self.scroll = row_for_source_line(&self.lines, line).min(self.max_scroll());
+            self.jump_to_source_line(line);
+            return;
+        }
+        // An anchor into this document — `[Terminal support](#terminal-support)`
+        // — is a jump, not something to hand to a web browser.
+        if let Some(anchor) = url.strip_prefix('#') {
+            match self.source_line_of_anchor(anchor) {
+                Some(line) => self.jump_to_source_line(line),
+                None => self.toast(&format!("no heading matches #{anchor}")),
+            }
             return;
         }
         // A relative Markdown path opens in the viewer; anything else is the
@@ -1015,6 +1020,42 @@ impl App {
             Some(path) => self.hand_off(&path.display().to_string()),
             None => self.hand_off(url),
         }
+    }
+
+    /// Leave whatever pane is open and put `line` of the file at the top.
+    fn jump_to_source_line(&mut self, line: usize) {
+        self.toc = false;
+        self.help = false;
+        self.cursor = None;
+        self.relayout();
+        self.scroll = row_for_source_line(&self.lines, line).min(self.max_scroll());
+    }
+
+    /// The line a GitHub-style `#anchor` points at.
+    ///
+    /// Headings are slugged the way GitHub slugs them and matched in document
+    /// order, so a repeated heading resolves to the first one — GitHub's
+    /// `-1`, `-2` suffixes for the later ones fall out of the same walk.
+    fn source_line_of_anchor(&self, anchor: &str) -> Option<usize> {
+        let wanted = anchor.to_lowercase();
+        let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for block in &self.doc.blocks {
+            if block.heading_level().is_none() {
+                continue;
+            }
+            let base = slugify(&block.text());
+            let count = seen.entry(base.clone()).or_insert(0);
+            let slug = if *count == 0 {
+                base
+            } else {
+                format!("{base}-{count}")
+            };
+            *count += 1;
+            if slug == wanted {
+                return Some(block.source_range.start);
+            }
+        }
+        None
     }
 
     fn hand_off(&mut self, target: &str) {
@@ -1424,6 +1465,30 @@ pub enum Yank {
     CodeBody,
     Path,
     Selection,
+}
+
+/// A heading's anchor, the way GitHub derives one.
+///
+/// GitHub does this in three steps, and the order is what makes the results
+/// surprising: lower-case it, delete everything that is not a word character,
+/// a hyphen, or a space, and only then turn each space into a hyphen.
+///
+/// Deleting punctuation *before* substituting means it leaves its neighbouring
+/// spaces behind, so `v0.9 — Mermaid` becomes `v09--mermaid` with two hyphens
+/// where the dash was. Runs are not collapsed and the ends are not trimmed.
+/// Letters outside ASCII are word characters, so `## 見出し` really does anchor
+/// at `#見出し`.
+pub fn slugify(heading: &str) -> String {
+    let mut out = String::with_capacity(heading.len());
+    for c in heading.chars() {
+        if c == ' ' {
+            out.push('-');
+        } else if c.is_alphanumeric() || c == '-' || c == '_' {
+            out.extend(c.to_lowercase());
+        }
+        // Everything else — punctuation, emoji, symbols, tabs — is dropped.
+    }
+    out
 }
 
 /// Which document is on screen: the help pane, the contents pane, or the file.
@@ -1857,6 +1922,67 @@ mod tests {
             a.toast.as_ref().unwrap().0.contains("3 more link"),
             "the ones past the last label are accounted for"
         );
+    }
+
+    /// A document with `filler` body lines under each heading, long enough that
+    /// there is somewhere to scroll to.
+    fn sectioned(headings: &[&str], filler: usize) -> String {
+        let mut out = String::new();
+        for heading in headings {
+            out.push_str(&format!("# {heading}\n\n"));
+            for i in 0..filler {
+                out.push_str(&format!("body {i}\n\n"));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn an_anchor_link_jumps_to_its_heading() {
+        let src = sectioned(&["Top", "Terminal support"], 10);
+        let wanted = src.lines().position(|l| l == "# Terminal support").unwrap() + 1;
+        let mut a = app(&src);
+        a.open("#terminal-support");
+        assert_eq!(a.current_source_line(), wanted, "the heading's own line");
+    }
+
+    #[test]
+    fn a_repeated_heading_resolves_the_way_github_numbers_it() {
+        let src = sectioned(&["Notes", "Notes"], 10);
+        let second = src
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| *l == "# Notes")
+            .nth(1)
+            .unwrap()
+            .0
+            + 1;
+        let mut a = app(&src);
+        a.open("#notes-1");
+        assert_eq!(a.current_source_line(), second, "the second one");
+        a.open("#notes");
+        assert_eq!(a.current_source_line(), 1, "back to the first");
+    }
+
+    #[test]
+    fn an_anchor_that_matches_no_heading_says_so() {
+        let mut a = app("# Top\n\ntext\n");
+        a.open("#nowhere");
+        assert!(a.toast.as_ref().unwrap().0.contains("no heading"));
+    }
+
+    #[test]
+    fn github_style_slugs() {
+        assert_eq!(slugify("Terminal support"), "terminal-support");
+        assert_eq!(
+            slugify("What counts as Markdown here"),
+            "what-counts-as-markdown-here"
+        );
+        // Punctuation goes, the words around it stay separated.
+        assert_eq!(slugify("Over ssh, and tmux"), "over-ssh-and-tmux");
+        assert_eq!(slugify("v0.9 — Mermaid"), "v09--mermaid");
+        // Non-ASCII letters are kept, as GitHub keeps them.
+        assert_eq!(slugify("見出し"), "見出し");
     }
 
     #[test]

@@ -745,7 +745,7 @@ issue tracker nobody reads.
       mentioned, which reads as the picker having missed them.
 - [x] `y` on its own does nothing: the yank needs `yy`, and the key after `y` is
       swallowed. Both this README and the help pane document a bare `y`.
-- [ ] In-document anchor links — `[Terminal support](#terminal-support)`, which
+- [x] In-document anchor links — `[Terminal support](#terminal-support)`, which
       this file itself uses — are handed to the system opener instead of jumping
       to the heading. The contents pane already maps `#line-N` this way.
 - [ ] Horizontal scrolling has no right-hand bound, so holding `l` in no-wrap
