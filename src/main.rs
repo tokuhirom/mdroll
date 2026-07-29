@@ -20,11 +20,19 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-fn main() -> Result<()> {
+fn main() {
     match real_main() {
+        Ok(()) => {}
         // A closed pipe is the reader saying it has had enough, not an error.
-        Err(err) if is_broken_pipe(&err) => Ok(()),
-        other => other,
+        Err(err) if is_broken_pipe(&err) => {}
+        Err(err) => {
+            // Printed by hand rather than returned from main: a `Result` from
+            // main is formatted with `Debug`, which means a missing file comes
+            // with a stack backtrace attached. Nobody needs a backtrace to be
+            // told a path does not exist.
+            eprintln!("mdroll: {err:#}");
+            std::process::exit(1);
+        }
     }
 }
 

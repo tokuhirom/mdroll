@@ -555,6 +555,9 @@ impl<'t> Builder<'t> {
                         Span::new(href.to_string(), style.patch(theme.link)).with_link(Some(id)),
                     );
                 }
+                // Source indentation inside the anchor is not part of the link
+                // text, and underlining it looks like a mistake.
+                unlink_edge_whitespace(out, before, style);
             }
             "img" => {
                 let url = element.attr("src").unwrap_or_default().to_string();
@@ -909,6 +912,24 @@ impl<'t> Builder<'t> {
         for child in node.children() {
             self.inline(child, style, link, out);
         }
+    }
+}
+
+/// Move whitespace at the edges of a link's text back outside the link.
+fn unlink_edge_whitespace(out: &mut [Span], from: usize, outer: Style) {
+    let blank = |span: &Span| span.text.chars().all(char::is_whitespace);
+    let tail = &mut out[from..];
+    if let Some(first) = tail.first_mut()
+        && blank(first)
+    {
+        first.style = outer;
+        first.link = None;
+    }
+    if let Some(last) = tail.last_mut()
+        && blank(last)
+    {
+        last.style = outer;
+        last.link = None;
     }
 }
 
@@ -1386,6 +1407,17 @@ mod tests {
         );
         assert_eq!(d.blocks[0].text(), "[Build] [Release]");
         assert_eq!(d.links.len(), 2);
+    }
+
+    #[test]
+    fn whitespace_inside_a_link_is_not_part_of_the_link() {
+        let d = doc("<p>\n  <a href=\"https://a.example\">\n    <b>text</b>\n  </a>\n</p>\n");
+        for span in &d.blocks[0].spans {
+            if span.text.trim().is_empty() {
+                assert!(span.link.is_none(), "{span:?}");
+                assert!(!span.style.underline, "{span:?}");
+            }
+        }
     }
 
     #[test]
