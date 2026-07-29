@@ -304,7 +304,16 @@ pub fn decode_entities(text: &str) -> String {
     while let Some(at) = rest.find('&') {
         out.push_str(&rest[..at]);
         rest = &rest[at..];
-        let Some(end) = rest[..rest.len().min(12)].find(';') else {
+        // A dozen *characters*, not a dozen bytes. An entity name is ASCII, so
+        // the two agree wherever one really begins — but `&` is far more often
+        // an ampersand than the start of anything, and a byte index counted
+        // into the text that follows lands inside a character and panics.
+        let Some(end) = rest
+            .char_indices()
+            .take(12)
+            .find(|(_, c)| *c == ';')
+            .map(|(at, _)| at)
+        else {
             out.push('&');
             rest = &rest[1..];
             continue;
@@ -467,6 +476,20 @@ mod tests {
     fn an_unknown_entity_is_left_alone() {
         assert_eq!(decode_entities("&frobnicate;"), "&frobnicate;");
         assert_eq!(decode_entities("A & B"), "A & B");
+    }
+
+    #[test]
+    fn an_ampersand_before_a_multi_byte_character_is_left_alone() {
+        // The `;` is looked for in the text just after the `&`, and stopping
+        // that search at a byte offset lands inside 'の' here.
+        assert_eq!(
+            decode_entities("QuickCheck & 日本語のテスト"),
+            "QuickCheck & 日本語のテスト"
+        );
+        assert_eq!(decode_entities("&あああああ"), "&あああああ");
+        // Still decoded when the entity really is one, whatever follows it.
+        assert_eq!(decode_entities("&amp;日本語"), "&日本語");
+        assert_eq!(decode_entities("A &amp; B & 日"), "A & B & 日");
     }
 
     #[test]

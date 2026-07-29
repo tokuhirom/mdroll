@@ -806,7 +806,7 @@ against this document. The first two are crashes on documents nobody would
 think twice about writing; the mermaid ones all break the module's own rule
 that declining beats drawing something subtly wrong.
 
-- [ ] The entity decoder looks for the `;` in the twelve bytes after an `&` by
+- [x] The entity decoder looks for the `;` in the twelve bytes after an `&` by
       slicing at byte twelve, which panics when a character straddles it.
       `QuickCheck & 日本語` in an HTML block takes the whole viewer down.
 - [ ] Attribute parsing steps over a byte it cannot make sense of, which lands
