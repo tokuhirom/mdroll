@@ -245,7 +245,7 @@ the ones that depend on what the terminal can actually do.
 | Inline images | WezTerm, kitty, ghostty | Alt text, dimmed |
 | Big headings, via DECDHL | WezTerm, xterm, foot | see below |
 | Big headings, rasterized | kitty, ghostty | Colour and weight only |
-| Heading borders and bars | kitty, ghostty | Not drawn; they live in the bitmap |
+| Heading borders and bars, free | kitty, ghostty | Drawn as text; the rule costs a row |
 | Clickable links (OSC 8) | Most modern terminals | Use `F` or `o` instead |
 | Clipboard over SSH (OSC 52) | Most modern terminals | Enable it in your terminal |
 | Truecolor | `COLORTERM=truecolor` | Nearest 256-color match |
@@ -597,9 +597,10 @@ h2 = { fg = "#8be9fd", bold = true, border = "#6272a4" }   # explicit colour
 h3 = { fg = "#50fa7b", bold = true }
 ```
 
-Only the levels drawn large can carry either, since the bitmap is the only place
-with room for them: `h3 = { bar = true }` parses and draws nothing. That is a
-defect and is listed below.
+Every level can carry either. Where the heading becomes a bitmap the two are
+painted into it and cost nothing; everywhere else they are drawn as text, which
+is what makes them work below the cutoff, on terminals with no graphics, and
+under `-z`.
 
 `true` takes the heading's own colour at 55%, which is the default for the two
 levels drawn large. Deriving it rather than requiring it written down is the
@@ -612,10 +613,13 @@ Unlike colour, decoration does **not** inherit down the levels. A theme naming
 only `h1`..`h3` gets `h3`'s colour on `h4`..`h6`, and asking for a bar on `h3`
 does not put one on every level beneath it.
 
-This is a place where terminals differ: decoration is drawn into the bitmap, so
-kitty and ghostty show it and the DECDHL terminals do not. Drawing a rule as
-text would cost a whole row, which is the more expensive of the two, and the
-capability table above already documents features that degrade elsewhere.
+The text form differs in what it costs rather than in whether it appears. A bar
+is a gutter, the same mechanism as the one down the side of a blockquote, so it
+takes a column and the heading reflows around it. A rule has nowhere to go but a
+row of its own, because a line of text fills its row from top to bottom and a
+terminal cannot underscore it with anything thinner than a character. So the
+same document is a row taller per `h1` and `h2` outside kitty and ghostty, where
+the bitmap has 0.22 of two already-reserved rows to spend and spends it.
 
 ### Clipboard
 
@@ -1017,7 +1021,7 @@ And two found while reading the above:
 - [x] The Headings section says `# Heading` is emitted double-height, but
       `heading_scale` does it for every heading up to level 2. `##` is drawn
       large and the document does not say so.
-- [ ] `border` and `bar` are accepted on every heading level and can only be
+- [x] `border` and `bar` are accepted on every heading level and can only be
       drawn on the two that get a bitmap, because that is the only path with
       anywhere to put them. `h3 = { bar = true }` parses, resolves, and draws
       nothing. Either the levels below the cutoff grow a text decoration that

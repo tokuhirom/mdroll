@@ -500,6 +500,7 @@ impl App {
             margin: self.settings.margin,
             calc: self.calc(),
             double_height: self.double_height,
+            raster_headings: self.double_height && self.raster_headings,
             images: self.settings.images && self.graphics.available(),
             cell: self.cell,
         }
