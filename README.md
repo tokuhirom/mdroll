@@ -1220,6 +1220,14 @@ told once.
       in the end. Quitting on it would put a second exit in the program that
       the keymap cannot see, cannot rebind and does not list, and a reader who
       is shown `q` once knows it for the whole session.
+- [x] The same signal-shaped key completed a yank. `Ctrl-C` arrives as
+      `Char('c')` and the second half of a two-key sequence was matched on the
+      character alone, so `y` followed by an attempt to interrupt the program
+      put the code block on the clipboard — a keystroke meant to stop
+      everything instead wrote to the one place outside the process the viewer
+      can reach. Only an unmodified key continues a sequence now; Shift is not
+      counted, because the case of the character carries it there the same way
+      it does in the keymap.
 
 ---
 

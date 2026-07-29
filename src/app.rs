@@ -1440,10 +1440,17 @@ impl App {
         // cost nothing.
         if let Some('y') = self.pending {
             self.pending = None;
+            // Only an unmodified key continues the sequence. `Ctrl-C` reaches
+            // here as `Char('c')`, because raw mode takes the signal away, and
+            // would otherwise complete `yc`: a reader trying to interrupt the
+            // program got the code block on their clipboard instead. Shift is
+            // not a modifier for this purpose — the case of the character
+            // already carries it, the way the keymap treats it.
+            let modified = !key.modifiers.difference(KeyModifiers::SHIFT).is_empty();
             match key.code {
-                KeyCode::Char('c') => return self.yank(out, Yank::CodeBody),
-                KeyCode::Char('p') => return self.yank(out, Yank::Path),
-                KeyCode::Char('y') => return self.yank(out, Yank::Source),
+                KeyCode::Char('c') if !modified => return self.yank(out, Yank::CodeBody),
+                KeyCode::Char('p') if !modified => return self.yank(out, Yank::Path),
+                KeyCode::Char('y') if !modified => return self.yank(out, Yank::Source),
                 _ => {}
             }
         }
@@ -1769,6 +1776,12 @@ mod tests {
     fn press(app: &mut App, c: char) {
         let mut sink = Vec::new();
         app.on_key(&mut sink, key(c)).unwrap();
+    }
+
+    fn press_ctrl(app: &mut App, c: char) {
+        let mut sink = Vec::new();
+        let event = KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
+        app.on_key(&mut sink, event).unwrap();
     }
 
     fn long_doc() -> App {
@@ -2298,15 +2311,38 @@ mod tests {
         // who thinks the program has hung. The list of keys is not what they
         // are after.
         let mut a = app("body\n");
-        let mut sink = Vec::new();
-        a.on_key(
-            &mut sink,
-            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
-        )
-        .unwrap();
+        press_ctrl(&mut a, 'c');
         let text: String = a.bottom_row().iter().map(|s| s.text.as_str()).collect();
         assert_eq!(text, " Ctrl-c does nothing — q to quit ");
         assert!(!a.quit, "saying where the exit is is not taking it");
+    }
+
+    #[test]
+    fn ctrl_c_after_y_does_not_complete_the_code_yank() {
+        // `Ctrl-C` arrives as `Char('c')`, so `y` then an attempt to interrupt
+        // the program put the code block on the clipboard. A modifier means
+        // the key was never the second half of the sequence.
+        let mut a = app("```\ncode\n```\n");
+        a.cursor = Some(0);
+        press(&mut a, 'y');
+        press_ctrl(&mut a, 'c');
+        assert_eq!(
+            a.toast.as_ref().map(|(text, _)| text.as_str()),
+            Some("Ctrl-c does nothing — q to quit")
+        );
+    }
+
+    #[test]
+    fn a_bare_c_after_y_still_yanks_the_code() {
+        let mut a = app("```\ncode\n```\n");
+        a.cursor = Some(0);
+        press(&mut a, 'y');
+        press(&mut a, 'c');
+        assert!(
+            a.toast.as_ref().unwrap().0.contains("yanked"),
+            "{:?}",
+            a.toast
+        );
     }
 
     #[test]
