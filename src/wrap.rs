@@ -113,7 +113,10 @@ pub fn wrap_ranges(text: &str, limit: usize, calc: &WidthCalc) -> Vec<(usize, us
         // Prefer the last legal break at or before the fitting point.
         let end = match breaks.iter().rev().find(|&&b| b > start && b <= fit_end) {
             Some(&b) => b,
-            None if fit_end > start => fit_end,
+            // Nothing UAX #14 offers fits, so the line is cut where it stops
+            // fitting — but that cut is still a line beginning, and kinsoku
+            // applies to it as much as to a chosen one.
+            None if fit_end > start => retreat_to_kinsoku(text, start, fit_end),
             // A single character wider than the limit: emit it anyway.
             None => start + text[start..].chars().next().map_or(1, char::len_utf8),
         };
@@ -125,6 +128,29 @@ pub fn wrap_ranges(text: &str, limit: usize, calc: &WidthCalc) -> Vec<(usize, us
         out.push((0, text.len()));
     }
     out
+}
+
+/// Pull a forced break back until it lands somewhere kinsoku permits.
+///
+/// This is 追い出し: the offending character is pushed down to the next line by
+/// shortening this one. Reached only when UAX #14 offers no break that fits —
+/// twelve columns of `a` followed by `。` has no opportunity anywhere, and
+/// cutting at the fitting point would open the next line with the `。`.
+///
+/// If every position back to `start` offends, the original point is used. A
+/// line that breaks badly is bad; a line that cannot break at all is a hang.
+fn retreat_to_kinsoku(text: &str, start: usize, fit_end: usize) -> usize {
+    let mut end = fit_end;
+    while end > start {
+        if kinsoku_allows(text, end) {
+            return end;
+        }
+        end -= text[start..end]
+            .chars()
+            .next_back()
+            .map_or(1, char::len_utf8);
+    }
+    fit_end
 }
 
 /// Chop `text` into runs of at most `limit` columns, ignoring word boundaries.
@@ -348,6 +374,52 @@ mod tests {
         // trailing "。" would land alone on the next line.
         let lines = wrap("日本語。", 6);
         assert_eq!(lines, vec!["日本", "語。"]);
+    }
+
+    #[test]
+    fn kinsoku_holds_even_when_the_break_has_to_be_forced() {
+        // Twelve columns of `a` and then `。`: UAX #14 offers no opportunity
+        // anywhere in the run, so the break is forced at the fitting point —
+        // which is exactly where the `。` would be stranded.
+        assert_eq!(
+            wrap("aaaaaaaaaaaa。つづく", 12),
+            vec!["aaaaaaaaaaa", "a。つづく"]
+        );
+        assert_eq!(
+            wrap("bbbbbbbbbbbb）あと", 12),
+            vec!["bbbbbbbbbbb", "b）あと"]
+        );
+    }
+
+    #[test]
+    fn a_forced_break_never_strands_a_clinging_character() {
+        // The property, over every width the text can be drawn at.
+        for text in [
+            "aaaaaaaaaaaa。つづく",
+            "xxxxxxxxxxxx」おわり",
+            "説明は（ここに書いてあります）ので確認してください。",
+            "aaaaaaaaaaaaaaaaaaaaaaaa、",
+        ] {
+            // From four columns up: a clinging character is two columns wide
+            // and needs at least one more beside it, so below that there is no
+            // arrangement that satisfies the rule and the forced break stands.
+            for limit in 4..30 {
+                for line in wrap(text, limit) {
+                    if let Some(c) = line.chars().next() {
+                        assert!(
+                            !forbidden_at_line_start(c),
+                            "limit={limit} line={line:?} starts with {c:?}"
+                        );
+                    }
+                    if let Some(c) = line.chars().last() {
+                        assert!(
+                            !forbidden_at_line_end(c),
+                            "limit={limit} line={line:?} ends with {c:?}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]

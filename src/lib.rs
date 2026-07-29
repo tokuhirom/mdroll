@@ -18,6 +18,7 @@ pub mod cli;
 pub mod clipboard;
 pub mod config;
 pub mod fetch;
+pub mod frontmatter;
 pub mod graphics;
 pub mod highlight;
 pub mod html;

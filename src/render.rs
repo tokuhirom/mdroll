@@ -314,15 +314,19 @@ impl Renderer {
         placement: &mut Placement,
     ) -> Result<()> {
         let double = line.scale == Scale::DoubleHeight;
-        // A double-height row shows half as many characters per column.
-        let cols = if double {
-            (frame.screen.cols / 2) as usize
+        // A double-height row shows half as many characters per column, and the
+        // horizontal offset has to be converted the same way: it is counted in
+        // display columns, and each of these characters occupies two of them.
+        // Slicing by the raw offset scrolls the heading twice as fast as the
+        // body under it.
+        let (cols, hoffset) = if double {
+            ((frame.screen.cols / 2) as usize, frame.hoffset / 2)
         } else {
-            frame.screen.cols as usize
+            (frame.screen.cols as usize, frame.hoffset)
         };
 
         let decorated = self.decorate(frame, idx, line);
-        let visible = slice_spans_columns(&decorated, frame.hoffset, cols, &self.calc);
+        let visible = slice_spans_columns(&decorated, hoffset, cols, &self.calc);
 
         for (i, prefix) in [DECDHL_TOP, DECDHL_BOTTOM].iter().enumerate() {
             if i == 1 && !double {
@@ -696,6 +700,31 @@ mod tests {
         let off = text.find(DECAWM_OFF).expect("DECAWM disabled");
         let on = text.find(DECAWM_ON).expect("DECAWM restored");
         assert!(off < on, "autowrap must be restored after the status row");
+    }
+
+    #[test]
+    fn a_double_height_row_scrolls_at_the_same_speed_as_the_rest() {
+        // A DECDHL cell is two display columns wide, so a row of them shows
+        // half as many characters — and an offset counted in columns has to be
+        // halved before it indexes them, or the heading slides twice as fast as
+        // the body under it.
+        let mut heading = Line::new(1, 0, vec![Span::plain("ABCDEFGHIJ")]);
+        heading.scale = Scale::DoubleHeight;
+        let body = Line::new(2, 1, vec![Span::plain("0123456789")]);
+        let lines = vec![heading, body];
+
+        let mut frame = basic_frame(&lines, &[]);
+        frame.hoffset = 4;
+        let text = strip_ansi(&frame_bytes(&frame));
+
+        // Four columns of body text is four characters.
+        assert!(text.contains("456789"), "body scrolled four columns");
+        // Four columns of double-width text is *two* characters.
+        assert_eq!(
+            text.matches("CDEFGHIJ").count(),
+            2,
+            "both halves of the heading, each scrolled four columns and not eight"
+        );
     }
 
     #[test]

@@ -470,6 +470,23 @@ heading and the contents follow it.
 An HTML block that produces nothing renderable falls back to showing its
 source, which is still better than showing nothing.
 
+### Front matter
+
+GitHub draws YAML front matter as a table, and that is what makes an ADR
+readable in a terminal: `status` and `date` are the first things you want, and
+a block of `key: value` is a poor way to read them.
+
+The parser covers the shapes that appear at the top of a document — scalars,
+quoted scalars, both spellings of a sequence, comments — and flattens each key
+to one row. What it does not cover, it declines: a nested mapping, a block
+scalar, an anchor, and the front matter falls back to its own source. That is
+the same bargain the HTML subset makes, and it is cheap here because front
+matter is only ever displayed. The cost of not understanding something is that
+you see it as written.
+
+A trailing `#` is left alone rather than treated as a comment, because
+`title: C# in 2026` is a value and there is no way to tell from the outside.
+
 ### Text measurement
 
 Display width comes from `unicode-width`. The East Asian Ambiguous class is
@@ -762,12 +779,25 @@ issue tracker nobody reads.
       it short of deleting the directory by hand.
 - [x] A `$$...$$` block leaves a blank row above and below it.
 
-### Beyond
+### v1.3 — Front matter
 
-- YAML front matter drawn as a table, the way GitHub shows it, rather than as a
-  code block
-- GitHub's repository autolinks — `#123`, `user/repo#123`, commit SHAs — which
-  need the repository context that `git remote` can supply
+- [x] YAML front matter drawn as a table, the way GitHub draws it
+- [x] A parsed subset, falling back to source for anything beyond it
+
+### v1.4 — Measurement
+
+Defects in the parts this document makes its strongest claims about, found by
+reading them against those claims. Each was invisible to the existing tests
+because the tests used text that happened to avoid the case.
+
+- [x] Kinsoku applied to forced breaks, not only to chosen ones: text with no
+      UAX #14 opportunity anywhere could still open a line with `。`
+- [x] Tab stops counted in display columns, so a tab after `日` lands where the
+      terminal puts it
+- [x] A table keeps its list marker wherever it sits in the document, rather
+      than only when it opens the file
+- [x] A double-height heading scrolls horizontally at the speed of the text
+      under it, rather than twice as fast
 
 ---
 
@@ -777,6 +807,12 @@ issue tracker nobody reads.
 - **HTML or PDF export.** Use pandoc.
 - **A browser.** Link following opens your system handler; it does not render
   remote pages.
+- **Repository autolinks.** GitHub turns `#123` and a commit SHA into links
+  because it already knows which repository you are looking at. A viewer opening
+  a file from disk does not: the file may be in no repository, or in one that is
+  not the repository the text refers to, and picking a remote to guess with
+  would turn plain text into a link to the wrong project. Being told `#123` is
+  better than being sent somewhere unrelated.
 - **Universal terminal support.** WezTerm is the reference. Features degrade
   elsewhere rather than being designed down to the lowest common denominator.
 
