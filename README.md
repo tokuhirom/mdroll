@@ -690,7 +690,6 @@ Key specs are a single character, a name such as `Esc`, `Space`, `Tab`,
 
 - Math via `$...$` and `$$...$$`
 - Definition lists
-- Use as a library, for embedding in other TUIs
 
 ---
 
