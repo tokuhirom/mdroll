@@ -824,7 +824,7 @@ that declining beats drawing something subtly wrong.
 - [x] An edge label is drawn on the row the parent's connector occupies, so it
       erases the line it belongs to, and the canvas is never widened for it, so
       anything long is silently cut off at the right edge.
-- [ ] In `flowchart LR` an edge that skips a rank is drawn straight at the box
+- [x] In `flowchart LR` an edge that skips a rank is drawn straight at the box
       in between; since the line is drawn only where the canvas is still blank,
       it vanishes entirely and the diagram is missing an edge.
 - [ ] A self-edge — `A --> A` — is dropped without a word, rather than drawn or
