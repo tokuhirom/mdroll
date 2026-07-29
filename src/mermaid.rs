@@ -523,7 +523,6 @@ fn draw_top_down(
             rank[e.to] > rank[e.from] + 1
         })
         .collect();
-    let width = content_width + long_edges.len() * 2 + 2;
 
     let mut boxes: Vec<Box> = Vec::with_capacity(chart.nodes.len());
     boxes.extend((0..chart.nodes.len()).map(|_| Box {
@@ -549,6 +548,28 @@ fn draw_top_down(
         }
     }
     let height = y;
+
+    // An edge label goes beside its child's column, on the far side from the
+    // parent, and needs room there. Nothing accounted for it, so a label wide
+    // enough ran off the right of the canvas and was cut off mid-word.
+    let (mut margin, mut extent) = (0usize, 0usize);
+    for edge in &chart.edges {
+        let Some(label) = &edge.label else { continue };
+        if rank[edge.to] != rank[edge.from] + 1 {
+            continue;
+        }
+        let w = calc.str(label);
+        let (fx, tx) = (boxes[edge.from].center_x(), boxes[edge.to].center_x());
+        if tx > fx {
+            extent = extent.max(tx + 1 + w);
+        } else {
+            margin = margin.max((w + 1).saturating_sub(fx));
+        }
+    }
+    for b in &mut boxes {
+        b.x += margin;
+    }
+    let width = margin + (content_width + long_edges.len() * 2 + 2).max(extent + 1);
     let mut grid = Grid::new(width, height);
 
     for (i, node) in chart.nodes.iter().enumerate() {
@@ -576,7 +597,10 @@ fn draw_top_down(
     }
     for (i, edge) in chart.edges.iter().enumerate() {
         if rank[edge.to] > rank[edge.from] + 1 {
-            let lane = content_width + 1 + long_edges.iter().position(|j| *j == i).unwrap_or(0) * 2;
+            let lane = margin
+                + content_width
+                + 1
+                + long_edges.iter().position(|j| *j == i).unwrap_or(0) * 2;
             route_lane(
                 &mut grid,
                 &boxes[edge.from],
@@ -748,8 +772,15 @@ fn fan_out(
             grid.put(tx, bottom.saturating_sub(1), '▼', calc);
         }
         if let Some(label) = &edge.label {
-            // Above the bus, beside the child's column, clear of both lines.
-            grid.text(tx + 1, mid.saturating_sub(1), label, calc);
+            // Above the bus, on the far side of the child's column from the
+            // parent. The parent's connector runs down this same row, and a
+            // label written straight across it erased the line it belongs to.
+            let x = if tx > fx {
+                tx + 1
+            } else {
+                fx.saturating_sub(calc.str(label) + 1)
+            };
+            grid.text(x, mid.saturating_sub(1), label, calc);
         }
     }
 }
@@ -1124,6 +1155,38 @@ mod tests {
             "one junction, not one per edge"
         );
         assert!(bus.contains('┌') && bus.contains('┐'), "{bus}");
+    }
+
+    #[test]
+    fn an_edge_label_is_drawn_in_full_and_leaves_the_connector_alone() {
+        let out = rows("flowchart TD\n A[p] -->|a fairly long label| B[left]\n A --> C[right]\n");
+        let row = out
+            .iter()
+            .find(|r| r.contains("a fairly long label"))
+            .expect("the label is drawn, and not cut off at the canvas edge");
+        // The parent's connector runs down this same row; the label used to be
+        // written straight over it.
+        assert!(row.contains('│'), "{row:?}");
+    }
+
+    #[test]
+    fn an_edge_label_survives_whatever_length_it_is() {
+        // Every one of these was silently truncated at the right edge once the
+        // label grew past the width of the boxes.
+        for n in 1..40 {
+            let label = "x".repeat(n);
+            let code = format!("flowchart TD\n A[p] -->|{label}| B[l]\n A -->|{label}| C[r]\n");
+            let out = rows(&code);
+            assert_eq!(
+                out.iter().filter(|r| r.contains(&label)).count(),
+                1,
+                "both labels share the row above the bus:\n{}",
+                out.join("\n")
+            );
+            let row = out.iter().find(|r| r.contains(&label)).unwrap();
+            assert_eq!(row.matches(&label).count(), 2, "{row:?}");
+            assert!(row.contains('│'), "{row:?}");
+        }
     }
 
     #[test]

@@ -821,7 +821,7 @@ that declining beats drawing something subtly wrong.
 - [x] A node whose id starts with `end`, `subgraph`, or `classDef` declines the
       whole diagram — `endpoint[X] --> B` renders as source. A sequence diagram
       does the same for a participant called `loopback` or `optional`.
-- [ ] An edge label is drawn on the row the parent's connector occupies, so it
+- [x] An edge label is drawn on the row the parent's connector occupies, so it
       erases the line it belongs to, and the canvas is never widened for it, so
       anything long is silently cut off at the right edge.
 - [ ] In `flowchart LR` an edge that skips a rank is drawn straight at the box
