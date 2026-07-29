@@ -734,7 +734,7 @@ Known defects, found by reading the code against this document. Each one is
 small on its own; they are collected here so the list is somewhere other than an
 issue tracker nobody reads.
 
-- [ ] The contents pane draws its links against the *main* document's link
+- [x] The contents pane draws its links against the *main* document's link
       table, because the draw path checks only for the help pane and not for the
       contents pane the way `active_doc` does. Ctrl-clicking an entry therefore
       opens an unrelated URL. `o` and `F` take the other path and are correct.

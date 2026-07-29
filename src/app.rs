@@ -485,13 +485,11 @@ impl App {
     }
 
     fn active_doc(&self) -> &Document {
-        if let (true, Some(doc)) = (self.help, &self.help_doc) {
-            return doc;
-        }
-        if let (true, Some(doc)) = (self.toc, &self.toc_doc) {
-            return doc;
-        }
-        &self.doc
+        pick_doc(
+            (self.help, &self.help_doc),
+            (self.toc, &self.toc_doc),
+            &self.doc,
+        )
     }
 
     /// True when the main document is hidden behind help or the contents pane.
@@ -1169,10 +1167,14 @@ impl App {
         };
         // Field-by-field borrows: the image store is taken mutably while the
         // rest of the state is read, so no method call on `self` may be live.
-        let doc = match (self.help, &self.help_doc) {
-            (true, Some(doc)) => doc,
-            _ => &self.doc,
-        };
+        // Hence the free function rather than `active_doc`, which would borrow
+        // all of `self` — but it has to be the *same* choice, or the links
+        // drawn belong to a different document than the lines they sit on.
+        let doc = pick_doc(
+            (self.help, &self.help_doc),
+            (self.toc, &self.toc_doc),
+            &self.doc,
+        );
         let frame = Frame {
             screen: self.screen,
             lines: &self.lines,
@@ -1380,6 +1382,26 @@ pub enum Yank {
     CodeBody,
     Path,
     Selection,
+}
+
+/// Which document is on screen: the help pane, the contents pane, or the file.
+///
+/// A free function taking the fields it needs, because the draw path holds a
+/// mutable borrow of the image store and so cannot call a method on `App`. It
+/// is the single answer to the question, which is the point — laying out one
+/// document and drawing another's links is exactly the bug this prevents.
+fn pick_doc<'a>(
+    help: (bool, &'a Option<Document>),
+    toc: (bool, &'a Option<Document>),
+    doc: &'a Document,
+) -> &'a Document {
+    if let (true, Some(pane)) = help {
+        return pane;
+    }
+    if let (true, Some(pane)) = toc {
+        return pane;
+    }
+    doc
 }
 
 fn is_markdown(path: &Path) -> bool {
