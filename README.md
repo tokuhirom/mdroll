@@ -827,7 +827,7 @@ that declining beats drawing something subtly wrong.
 - [x] In `flowchart LR` an edge that skips a rank is drawn straight at the box
       in between; since the line is drawn only where the canvas is still blank,
       it vanishes entirely and the diagram is missing an edge.
-- [ ] A self-edge — `A --> A` — is dropped without a word, rather than drawn or
+- [x] A self-edge — `A --> A` — is dropped without a word, rather than drawn or
       declined.
 - [x] A sequence message whose text contains `-->`, as in `A->B: use --> this`,
       is split at the arrow inside the text and the whole diagram is declined.

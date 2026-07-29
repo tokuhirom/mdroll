@@ -430,14 +430,14 @@ fn unquote(s: &str) -> String {
 
 /// Assign each node to a rank: one past the deepest of its parents.
 ///
-/// Returns `None` for a cyclic graph, which this renderer does not model.
+/// Returns `None` for a cyclic graph, which this renderer does not model —
+/// including `A --> A`, the smallest cycle there is. A self-edge was excepted
+/// from the count here and then had nowhere to be drawn, so it disappeared.
 fn ranks(chart: &Flowchart) -> Option<Vec<usize>> {
     let n = chart.nodes.len();
     let mut indegree = vec![0usize; n];
     for edge in &chart.edges {
-        if edge.from != edge.to {
-            indegree[edge.to] += 1;
-        }
+        indegree[edge.to] += 1;
     }
     let mut rank = vec![0usize; n];
     let mut queue: Vec<usize> = (0..n).filter(|i| indegree[*i] == 0).collect();
@@ -445,11 +445,7 @@ fn ranks(chart: &Flowchart) -> Option<Vec<usize>> {
 
     while let Some(node) = queue.pop() {
         seen += 1;
-        for edge in chart
-            .edges
-            .iter()
-            .filter(|e| e.from == node && e.to != node)
-        {
+        for edge in chart.edges.iter().filter(|e| e.from == node) {
             rank[edge.to] = rank[edge.to].max(rank[node] + 1);
             indegree[edge.to] -= 1;
             if indegree[edge.to] == 0 {
@@ -1325,6 +1321,15 @@ mod tests {
     #[test]
     fn a_cycle_is_declined_rather_than_drawn_wrong() {
         assert!(render("flowchart TD\n A --> B\n B --> A\n", &CALC).is_none());
+    }
+
+    #[test]
+    fn a_self_edge_is_declined_rather_than_dropped() {
+        // The rank layout has nowhere to put one, so it was left out of the
+        // drawing and the reader was shown a chart with an edge missing.
+        assert!(render("flowchart TD\n A --> A\n", &CALC).is_none());
+        assert!(render("flowchart TD\n A --> A\n A --> B\n", &CALC).is_none());
+        assert!(render("flowchart LR\n A --> B\n B --> B\n", &CALC).is_none());
     }
 
     #[test]
