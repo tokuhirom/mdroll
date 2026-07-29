@@ -1246,12 +1246,29 @@ fn connect_right(
     }
 
     if fy == ty {
-        grid.hline(left, right - 1, fy, calc);
+        // Stated as directions too, for the same reason: a child level with its
+        // parent is reached by a straight run, and that run crosses the column
+        // the parent's other connectors turn in. Drawn as plain line it was
+        // refused there — the cell was not blank — so the run stopped dead at a
+        // corner belonging to another edge of its own fan.
+        for x in left..right {
+            grid.join(x, fy, LEFT | RIGHT, calc);
+        }
     } else {
-        grid.hline(left, mid, fy, calc);
-        grid.put(mid, fy, if ty > fy { '┐' } else { '┘' }, calc);
+        // Both corners are stated as the directions the line leaves in rather
+        // than as the glyph one edge alone would need, because every connector
+        // of a band turns in this same column and each knows only its own half
+        // of what is there. A parent with a child above and one below turns
+        // twice in the cell beside it — `┘` and `┐`, which together are `┤` —
+        // and drawn as glyphs the second simply replaced the first, leaving the
+        // run it carried stopping half a cell short of the corner.
+        let (leaving, arriving) = if ty > fy { (DOWN, UP) } else { (UP, DOWN) };
+        if mid > left {
+            grid.hline(left, mid - 1, fy, calc);
+        }
+        grid.join(mid, fy, LEFT | leaving, calc);
         grid.vline(mid, fy.min(ty) + 1, fy.max(ty) - 1, calc);
-        grid.put(mid, ty, if ty > fy { '└' } else { '┌' }, calc);
+        grid.join(mid, ty, RIGHT | arriving, calc);
         grid.hline(mid + 1, right - 1, ty, calc);
     }
     // An `RL` chart's edges were turned round to place the ranks, so the head
@@ -1872,6 +1889,59 @@ mod tests {
             "both beside the bus:\n{}",
             out.join("\n")
         );
+    }
+
+    /// The row a box sits on, out of a drawing.
+    fn row_of<'a>(out: &'a [String], boxed: &str) -> &'a String {
+        out.iter()
+            .find(|r| r.contains(boxed))
+            .unwrap_or_else(|| panic!("no {boxed}:\n{}", out.join("\n")))
+    }
+
+    #[test]
+    fn a_sideways_fan_turns_in_one_glyph_rather_than_in_the_last_one_drawn() {
+        // Every connector of a band turns in the same column and each knows
+        // only its own half of what belongs there: `┘` for the child above and
+        // `┐` for the one below are together a `┤`, and drawn as glyphs
+        // whichever went second replaced the other. `│ A │───┐` with a `│`
+        // standing on it is a run stopping half a cell short of its own corner.
+        for n in 2..7 {
+            let mut code = String::from("flowchart LR\n");
+            for i in 0..n {
+                code.push_str(&format!(" A --> {}\n", (b'B' + i) as char));
+            }
+            let out = rows(&code);
+            // An odd fan has a child level with the parent, reached by a
+            // straight run through the same cell, which makes the fourth arm.
+            let want = if n % 2 == 1 { '┼' } else { '┤' };
+            let row = row_of(&out, "│ A │");
+            assert!(
+                row.contains(want),
+                "{n} children want {want}: {row:?}\n{}",
+                out.join("\n")
+            );
+        }
+    }
+
+    #[test]
+    fn a_sideways_merge_turns_in_one_glyph_as_well() {
+        // The same cell on the other end of the run: every parent's connector
+        // arrives at the child's row in the turning column, and the glyph there
+        // has to carry all of them rather than the last one written.
+        for n in 2..7 {
+            let mut code = String::from("flowchart LR\n");
+            for i in 0..n {
+                code.push_str(&format!(" {} --> Z\n", (b'A' + i) as char));
+            }
+            let out = rows(&code);
+            let want = if n % 2 == 1 { '┼' } else { '├' };
+            let row = row_of(&out, "│ Z │");
+            assert!(
+                row.contains(want),
+                "{n} parents want {want}: {row:?}\n{}",
+                out.join("\n")
+            );
+        }
     }
 
     #[test]

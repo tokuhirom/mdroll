@@ -1109,12 +1109,13 @@ the edges, and sometimes there is an edge in the picture that nobody wrote.
       order, is declined for a crossing that swapping the two would remove.
       A sweep that orders each rank to reduce crossings would give some of these
       charts back.
-- [ ] In `flowchart LR` the corner where a connector turns is drawn hard, so
+- [x] In `flowchart LR` the corner where a connector turns is drawn hard, so
       where two turn in the same column the second erases the first's. In a
       diamond, `A`'s connector turns at `┐` where `┤` belongs, and the run
-      carrying its other edge stops half a cell short of it. The top-down bus
-      states its junctions as directions and joins them; the sideways one has
-      never been made to.
+      carrying its other edge stops half a cell short of it. A child level with
+      its parent has it worse: its run is refused the cell outright and stops
+      dead at the corner. The top-down bus states its junctions as directions
+      and joins them; the sideways one has never been made to.
 
 ---
 
