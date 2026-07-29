@@ -84,7 +84,7 @@ $ mise install
 ### cargo
 
 ```console
-$ cargo install --locked mdroll
+$ cargo install --locked --git https://github.com/tokuhirom/mdroll
 ```
 
 ### From source
