@@ -1261,6 +1261,21 @@ already was, and that visiting it moved them.
       the entry is off the first screenful and the pane used to open at its
       own top: the mark is what it scrolls to.
 
+### v1.10 — What the screen is holding
+
+An upload is work already done and can always be done again. A placement is not:
+it is a picture on the reader's screen, and the record of what was placed last
+frame is the only thing in the program that can take one back. Losing that
+record loses the picture — permanently, because nothing else remembers it.
+
+- [x] Cycling the theme left every picture that was on screen there for the rest
+      of the session. A theme change reparses the document, and the reparse
+      forgets the uploads, which is right: the ids belonged to the old document.
+      It forgot what was placed along with them. The next frame sent the same
+      image up again under a fresh id and drew it over the top, and the first
+      placement, which no longer appeared in any record, was never deleted — so
+      it stayed where it was and scrolling slid the document out from under it.
+
 ---
 
 ## Non-goals
