@@ -432,8 +432,7 @@ impl ImageStore {
     pub fn place_text<W: Write>(
         &mut self,
         out: &mut W,
-        text: &str,
-        color: (u8, u8, u8),
+        runs: &[bigtext::Run<'_>],
         cols: u16,
         rows: u16,
         decor: bigtext::HeadingDecor,
@@ -441,20 +440,17 @@ impl ImageStore {
         if !self.can_rasterize() || cols == 0 || rows == 0 {
             return Ok(false);
         }
-        // Decoration is part of the bitmap, so it is part of the key: two
-        // headings with the same words and colour but different rules under
-        // them are two different images.
-        let key = format!(
-            "{cols}x{rows}:{},{},{}:{:?}:{text}",
-            color.0, color.1, color.2, decor
-        );
+        // Everything the bitmap is drawn from is part of the key. Two headings
+        // with the same words differ as images if a span inside one of them is
+        // a different colour, or if the rule under them is.
+        let key = format!("{cols}x{rows}:{decor:?}:{runs:?}");
         let kitty_id = match self.text.get(&key) {
             Some(id) => *id,
             None => {
                 let Some(png) = self
                     .big
                     .as_ref()
-                    .and_then(|r| r.render(text, color, cols, rows, self.cell, decor))
+                    .and_then(|r| r.render(runs, cols, rows, self.cell, decor))
                 else {
                     return Ok(false);
                 };
