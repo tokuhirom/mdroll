@@ -42,6 +42,7 @@ pub enum Action {
     Reload,
     Contents,
     Help,
+    Edit,
 }
 
 /// The default bindings, which are also the ones the README documents.
@@ -75,6 +76,7 @@ pub const DEFAULTS: &[(Action, &[&str])] = &[
     (Action::NextMatch, &["n"]),
     (Action::PrevMatch, &["N"]),
     (Action::Reload, &["r"]),
+    (Action::Edit, &["v"]),
     (Action::Contents, &["T"]),
     (Action::Help, &["H"]),
 ];
@@ -114,6 +116,7 @@ impl Action {
             Action::Reload => "reload",
             Action::Contents => "contents",
             Action::Help => "help",
+            Action::Edit => "edit",
         }
     }
 

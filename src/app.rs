@@ -92,6 +92,11 @@ pub struct App {
     pub raster_headings: bool,
     pub images: ImageStore,
 
+    /// Set when `v` is pressed: the file and line to open an editor at. The
+    /// event loop picks it up, because leaving and re-entering the alternate
+    /// screen is the one thing [`App`] cannot do for itself.
+    pub edit_request: Option<(PathBuf, usize)>,
+
     /// Diagrams being rendered by `mmdc` on a worker thread.
     diagrams: Option<Receiver<Diagram>>,
     /// Bumped on every reparse, so results for a document that has since been
@@ -181,6 +186,7 @@ impl App {
             graphics: graphics.protocol,
             cell: graphics.cell,
             raster_headings: graphics.raster_headings,
+            edit_request: None,
             diagrams: None,
             generation: 0,
             images: {
@@ -860,6 +866,18 @@ impl App {
         Ok(())
     }
 
+    /// Ask the event loop to open an editor at the line currently on top.
+    pub fn edit(&mut self) {
+        if self.overlaid() {
+            self.toast("nothing to edit here");
+            return;
+        }
+        match self.path.clone() {
+            Some(path) => self.edit_request = Some((path, self.current_source_line())),
+            None => self.toast("no file to edit"),
+        }
+    }
+
     /// Last modification time of the open file, for `--watch`.
     pub fn mtime(&self) -> Option<std::time::SystemTime> {
         std::fs::metadata(self.path.as_ref()?).ok()?.modified().ok()
@@ -1196,6 +1214,7 @@ impl App {
             Action::PrevMatch => self.jump_match(!self.last_forward),
 
             Action::Reload => self.reload(),
+            Action::Edit => self.edit(),
             Action::Contents => self.toggle_toc(),
             Action::Help => self.toggle_help(),
         }
@@ -1591,6 +1610,41 @@ mod tests {
         press(&mut a, 'H');
         assert!(!a.help);
         assert!(a.lines.iter().any(|l| l.text().contains("Real")));
+    }
+
+    #[test]
+    fn v_asks_for_an_editor_at_the_line_on_screen() {
+        let body: String = (1..=40).map(|i| format!("line {i}\n\n")).collect();
+        let mut a = app(&body);
+        a.scroll = 10;
+        press(&mut a, 'v');
+        let (path, line) = a.edit_request.take().expect("an edit was requested");
+        assert_eq!(path, PathBuf::from("test.md"));
+        assert_eq!(line, a.current_source_line());
+    }
+
+    #[test]
+    fn v_declines_when_there_is_no_file() {
+        let mut a = App::new(
+            "body\n".to_string(),
+            None,
+            Settings::default(),
+            Theme::default(),
+            Screen::new(40, 10),
+            GraphicsInfo::disabled(),
+        );
+        press(&mut a, 'v');
+        assert!(a.edit_request.is_none());
+        assert_eq!(a.toast.as_ref().unwrap().0, "no file to edit");
+    }
+
+    #[test]
+    fn v_declines_while_the_help_pane_is_up() {
+        let mut a = app("# Real\n");
+        press(&mut a, 'H');
+        press(&mut a, 'v');
+        assert!(a.edit_request.is_none());
+        assert_eq!(a.toast.as_ref().unwrap().0, "nothing to edit here");
     }
 
     #[test]

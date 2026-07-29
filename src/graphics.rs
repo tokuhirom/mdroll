@@ -183,6 +183,21 @@ impl ImageStore {
     pub fn forget_all(&mut self) {
         self.sources.clear();
         self.uploaded.clear();
+        self.invalidate_uploads();
+    }
+
+    /// Forget what the terminal is holding, while remembering where the images
+    /// came from.
+    ///
+    /// Needed after leaving and re-entering the alternate screen — an editor
+    /// has been on the screen in between, and there is no way to know what
+    /// survived, so everything is re-sent.
+    pub fn invalidate_uploads(&mut self) {
+        self.uploaded.clear();
+        self.text.clear();
+        self.origin.clear();
+        self.placed_now.clear();
+        self.placed_before.clear();
     }
 
     /// Start a frame. Nothing is emitted: placements are *replaced* in place as

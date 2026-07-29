@@ -38,14 +38,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # musl on Linux, so the binary really is standalone. Every dependency
-          # is pure Rust, so no cross-compiler is needed.
+          # musl on Linux, so the binary really is standalone. Every
+          # dependency is pure Rust, so each target builds natively on a runner
+          # of its own architecture and no cross-compiler is involved.
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
           - target: aarch64-unknown-linux-musl
             os: ubuntu-24.04-arm
+          # Both macOS targets build on Apple silicon: Xcode ships the x86_64
+          # SDK, and the Intel runners are being retired, so a job asking for
+          # one can sit in the queue indefinitely.
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: macos-latest
           - target: aarch64-apple-darwin
             os: macos-latest
           - target: x86_64-pc-windows-msvc
@@ -61,6 +65,10 @@ jobs:
         with:
           bin: mdroll
           target: ${{ matrix.target }}
+          # Without this the action reaches for `cross` on the musl targets,
+          # which then tries to install an x86_64 toolchain on the arm64
+          # runner and fails. The host already matches the target here.
+          build_tool: cargo
           archive: $bin-$tag-$target
           include: README.md,LICENSE
           checksum: sha256

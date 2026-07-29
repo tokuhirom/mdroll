@@ -16,7 +16,8 @@ use mdroll::render::{Renderer, detect_double_height};
 use mdroll::screen::Screen;
 use mdroll::theme;
 use std::io::{IsTerminal, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Duration;
 
 fn main() -> Result<()> {
@@ -216,6 +217,71 @@ impl Terminal {
         }
         Ok(Terminal { mouse })
     }
+
+    /// Hand the terminal back, so another full-screen program can use it.
+    fn suspend(&self) -> Result<()> {
+        let mut out = std::io::stdout();
+        if self.mouse {
+            execute!(out, event::DisableMouseCapture)?;
+        }
+        execute!(out, cursor::Show, LeaveAlternateScreen)?;
+        disable_raw_mode()?;
+        Ok(())
+    }
+
+    fn resume(&self) -> Result<()> {
+        enable_raw_mode()?;
+        let mut out = std::io::stdout();
+        execute!(out, EnterAlternateScreen, cursor::Hide)?;
+        if self.mouse {
+            execute!(out, event::EnableMouseCapture)?;
+        }
+        Ok(())
+    }
+}
+
+/// Build the command that opens `path` at `line`.
+///
+/// `$VISUAL` wins over `$EDITOR`, both may carry arguments, and the way to ask
+/// for a line number is different for almost every editor.
+fn editor_command(spec: &str, path: &Path, line: usize) -> Option<Command> {
+    let mut parts = spec.split_whitespace();
+    let program = parts.next()?;
+    let mut command = Command::new(program);
+    command.args(parts);
+
+    let name = Path::new(program)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(program)
+        .to_ascii_lowercase();
+    match name.as_str() {
+        "vi" | "vim" | "nvim" | "view" | "nano" | "pico" | "micro" | "kak" | "joe" | "emacs"
+        | "emacsclient" => {
+            command.arg(format!("+{line}"));
+            command.arg(path);
+        }
+        "hx" | "helix" | "subl" | "sublime_text" => {
+            command.arg(format!("{}:{line}", path.display()));
+        }
+        "code" | "code-insiders" | "codium" | "cursor" => {
+            command.arg("-g");
+            command.arg(format!("{}:{line}", path.display()));
+        }
+        _ => {
+            command.arg(path);
+        }
+    }
+    Some(command)
+}
+
+fn editor_spec() -> String {
+    for name in ["VISUAL", "EDITOR"] {
+        if let Some(value) = env_var(name) {
+            return value;
+        }
+    }
+    if cfg!(windows) { "notepad" } else { "vi" }.to_string()
 }
 
 impl Drop for Terminal {
@@ -229,8 +295,37 @@ impl Drop for Terminal {
     }
 }
 
+/// Run an editor on the open file, then come back and pick up the changes.
+fn edit<W: Write>(
+    app: &mut App,
+    out: &mut W,
+    terminal: &Terminal,
+    path: &Path,
+    line: usize,
+) -> Result<()> {
+    let spec = editor_spec();
+    let Some(mut command) = editor_command(&spec, path, line) else {
+        app.toast("no editor configured");
+        return Ok(());
+    };
+
+    out.flush()?;
+    terminal.suspend()?;
+    let status = command.status();
+    terminal.resume()?;
+    // An editor has had the screen in the meantime, so nothing can be assumed
+    // about what the terminal still holds.
+    app.images.invalidate_uploads();
+
+    match status {
+        Ok(_) => app.reload(),
+        Err(err) => app.toast(&format!("cannot run {spec:?}: {err}")),
+    }
+    Ok(())
+}
+
 fn run(app: &mut App) -> Result<()> {
-    let _terminal = Terminal::enter(app.settings.mouse)?;
+    let terminal = Terminal::enter(app.settings.mouse)?;
     let mut renderer = Renderer::new(app.calc());
     renderer.no_color = app.settings.no_color;
 
@@ -268,6 +363,10 @@ fn run(app: &mut App) -> Result<()> {
         match event::read()? {
             Event::Key(key) if key.kind != KeyEventKind::Release => {
                 app.on_key(&mut out, key)?;
+                if let Some((path, line)) = app.edit_request.take() {
+                    edit(app, &mut out, &terminal, &path, line)?;
+                    seen_mtime = app.mtime();
+                }
             }
             Event::Resize(cols, rows) => app.resize(Screen::new(cols, rows)),
             Event::Mouse(mouse) => match mouse.kind {
@@ -293,4 +392,56 @@ fn run(app: &mut App) -> Result<()> {
     }
     out.flush()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(spec: &str) -> Vec<String> {
+        let command = editor_command(spec, Path::new("/tmp/doc.md"), 42).unwrap();
+        std::iter::once(command.get_program())
+            .chain(command.get_args())
+            .map(|s| s.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn vi_style_editors_take_a_plus_line_argument() {
+        assert_eq!(args("vim"), ["vim", "+42", "/tmp/doc.md"]);
+        assert_eq!(args("nano"), ["nano", "+42", "/tmp/doc.md"]);
+    }
+
+    #[test]
+    fn helix_and_sublime_take_a_colon_suffix() {
+        assert_eq!(args("hx"), ["hx", "/tmp/doc.md:42"]);
+    }
+
+    #[test]
+    fn vscode_needs_its_goto_flag() {
+        assert_eq!(args("code"), ["code", "-g", "/tmp/doc.md:42"]);
+    }
+
+    #[test]
+    fn an_editor_spec_may_carry_arguments() {
+        assert_eq!(args("code -w"), ["code", "-w", "-g", "/tmp/doc.md:42"]);
+    }
+
+    #[test]
+    fn a_full_path_is_matched_on_its_basename() {
+        assert_eq!(
+            args("/usr/bin/nvim"),
+            ["/usr/bin/nvim", "+42", "/tmp/doc.md"]
+        );
+    }
+
+    #[test]
+    fn an_unknown_editor_just_gets_the_file() {
+        assert_eq!(args("ed"), ["ed", "/tmp/doc.md"]);
+    }
+
+    #[test]
+    fn an_empty_spec_has_no_program_to_run() {
+        assert!(editor_command("   ", Path::new("/tmp/doc.md"), 1).is_none());
+    }
 }

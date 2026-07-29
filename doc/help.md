@@ -55,6 +55,7 @@ Press `H` or `Esc` to close this help.
 | Key | Action |
 | --- | --- |
 | `r` | Reload the file |
+| `v` | Open `$EDITOR` at the line on screen, then reload |
 | `T` | Table of contents — pick an entry with `o` or `Enter` |
 | `H` | Show this help |
 | `q` `Esc` | Quit |

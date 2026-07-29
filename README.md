@@ -135,7 +135,8 @@ on a terminal.
 `mdroll --man > mdroll.1` writes a man page, generated from the same definition
 the argument parser uses so it cannot drift.
 
-Environment variables: `MDROLL_THEME`, `MDROLL_CONFIG`, `NO_COLOR`.
+Environment variables: `MDROLL_THEME`, `MDROLL_CONFIG`, `NO_COLOR`, and
+`VISUAL` or `EDITOR` for the `v` key.
 
 Precedence is **command line → environment → config file → built-in default**.
 
@@ -213,6 +214,7 @@ gives you the text exactly as written.
 | Key | Action |
 | --- | --- |
 | `r` | Reload the file |
+| `v` | Open `$EDITOR` at the line on screen, then reload |
 | `T` | Table of contents |
 | `H` | Show help |
 | `q` / `Esc` | Quit |
@@ -501,7 +503,8 @@ Action names are `quit`, `scroll_down`, `scroll_up`, `half_page_down`,
 `scroll_right`, `reset_scroll`, `toggle_wrap`, `toggle_source`, `cycle_theme`,
 `toggle_big_headings`, `toggle_images`, `cursor_next`, `cursor_prev`, `yank`,
 `yank_rendered`, `select_lines`, `link_pick`, `open`, `search_forward`,
-`search_backward`, `next_match`, `prev_match`, `reload`, `contents`, and `help`.
+`search_backward`, `next_match`, `prev_match`, `reload`, `edit`, `contents`, and
+`help`.
 Key specs are a single character, a name such as `Esc`, `Space`, `Tab`,
 `Shift-Tab`, `PgDn`, `Home`, or an arrow, optionally prefixed with `Ctrl-` or
 `Alt-`.
