@@ -233,6 +233,11 @@ Links are also emitted as OSC 8 hyperlinks, so `Cmd`-click (macOS) or
 `Ctrl`-click opens them directly through the terminal without `mdroll` capturing
 the mouse.
 
+`T` and `H` put a pane over the document, and closing one comes back to the row
+you were reading rather than to the top. The contents pane is where a reader
+goes precisely when they have not decided to move yet, so deciding against it
+has to cost nothing. Picking an entry is a decision and goes where it says.
+
 `?` is backward search, the pager meaning, because the whole of the navigation
 here is the pager's — `j`, `k`, `d`, `u`, `f`, `b`, `g`, `G`, `/`, `n`, `N` —
 and giving `?` to the help would leave `/` without its opposite. But `?` is what
@@ -1228,6 +1233,26 @@ told once.
       can reach. Only an unmodified key continues a sequence now; Shift is not
       counted, because the case of the character carries it there the same way
       it does in the keymap.
+
+### v1.9 — Where you were
+
+A sidebar was considered for the contents and turned down: a pane down one side
+costs columns on every row of every document, and where a `#` heading is drawn
+with DECDHL the sequence is a property of the whole terminal line, so anything
+sharing those rows is doubled with it. What the contents pane was missing was
+never the columns. It was that it did not say where in the document the reader
+already was, and that visiting it moved them.
+
+- [x] Opening the contents or the help and closing it again put the document
+      back at the top. The pane is a look at something else, and the contents in
+      particular is where a reader goes when they have not decided to move at
+      all — so the one gesture that should have cost nothing cost them their
+      place, and in a long document there was no way back to it.
+- [ ] The contents pane lists every heading and marks none of them, so a reader
+      who opens it to find out where they are has to work it out from the
+      headings around the one they came from. The status line already computes
+      the enclosing section for its breadcrumb, and the pane is drawn by the
+      same machinery that highlights a search match.
 
 ---
 

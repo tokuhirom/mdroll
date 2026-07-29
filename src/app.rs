@@ -95,6 +95,9 @@ pub struct App {
     help_doc: Option<Document>,
     pub toc: bool,
     toc_doc: Option<Document>,
+    /// The source line the document was showing when a pane went over it, so
+    /// closing the pane comes back to it. `None` when no pane is open.
+    place: Option<usize>,
 
     pub matches: Vec<Match>,
     pub current_match: Option<usize>,
@@ -217,6 +220,7 @@ impl App {
             help_doc: None,
             toc: false,
             toc_doc: None,
+            place: None,
             matches: Vec::new(),
             current_match: None,
             last_query: String::new(),
@@ -715,12 +719,18 @@ impl App {
         self.measure_images();
         self.help_doc = None;
         self.toc_doc = None;
-        self.toc = false;
+        let closed_the_contents = std::mem::take(&mut self.toc);
         self.prepare_diagrams();
         if self.help {
             self.help_doc = Some(crate::parse::parse(HELP, &self.theme));
         }
-        self.relayout();
+        // Cycling the theme with the contents open drops the pane, which is
+        // the same as closing it: come back to what was being read.
+        if closed_the_contents {
+            self.leave_pane();
+        } else {
+            self.relayout();
+        }
     }
 
     pub fn toggle_double_height(&mut self) {
@@ -749,17 +759,42 @@ impl App {
         });
     }
 
+    /// Note where the document is before a pane covers it. A pane opened from
+    /// another pane changes nothing: the place to come back to is the one the
+    /// first of them was opened from.
+    fn enter_pane(&mut self) {
+        if !self.overlaid() {
+            self.place = Some(self.current_source_line());
+        }
+    }
+
+    /// Put the document back where [`App::enter_pane`] left it. A pane is a
+    /// look at something else, not a way of losing your place in what you were
+    /// reading — and the contents pane is where a reader goes precisely when
+    /// they are not sure they want to move at all.
+    fn leave_pane(&mut self) {
+        let place = self.place.take();
+        self.relayout();
+        self.scroll = match place {
+            Some(line) => row_for_source_line(&self.lines, line).min(self.max_scroll()),
+            None => 0,
+        };
+    }
+
     pub fn toggle_help(&mut self) {
+        self.enter_pane();
         self.help = !self.help;
+        self.cursor = None;
         if self.help {
             self.toc = false;
             if self.help_doc.is_none() {
                 self.help_doc = Some(crate::parse::parse(HELP, &self.theme));
             }
+            self.scroll = 0;
+            self.relayout();
+        } else {
+            self.leave_pane();
         }
-        self.scroll = 0;
-        self.cursor = None;
-        self.relayout();
     }
 
     /// A table of contents, built as a Markdown document of links.
@@ -767,20 +802,24 @@ impl App {
     /// Reusing the document machinery means the link picker, the block cursor,
     /// and `o` all work in the contents pane without any new modes.
     pub fn toggle_toc(&mut self) {
+        self.enter_pane();
         self.toc = !self.toc;
+        self.cursor = None;
         if self.toc {
             self.help = false;
             let markdown = self.toc_markdown();
             if markdown.is_none() {
                 self.toc = false;
+                self.place = None;
                 self.toast("no headings");
                 return;
             }
             self.toc_doc = Some(crate::parse::parse(&markdown.unwrap(), &self.theme));
+            self.scroll = 0;
+            self.relayout();
+        } else {
+            self.leave_pane();
         }
-        self.scroll = 0;
-        self.cursor = None;
-        self.relayout();
     }
 
     fn toc_markdown(&self) -> Option<String> {
@@ -1069,6 +1108,9 @@ impl App {
     fn jump_to_source_line(&mut self, line: usize) {
         self.toc = false;
         self.help = false;
+        // A reader who picked an entry has said where they want to be, so the
+        // place the pane was opened from is no longer anywhere to come back to.
+        self.place = None;
         self.cursor = None;
         self.relayout();
         self.scroll = row_for_source_line(&self.lines, line).min(self.max_scroll());
@@ -1789,6 +1831,15 @@ mod tests {
         app(&body)
     }
 
+    /// Long enough to scroll, with a heading every few lines so the contents
+    /// pane has something to say.
+    fn sectioned_doc() -> App {
+        let body: String = (1..=30)
+            .map(|i| format!("## Section {i}\n\nbody of section {i}\n\n"))
+            .collect();
+        app(&body)
+    }
+
     #[test]
     fn opening_a_badge_goes_where_it_links_not_to_its_picture() {
         let app = app("[![Build](b.svg)](https://a.example)\n");
@@ -2234,6 +2285,70 @@ mod tests {
         a.open(&url);
         assert!(!a.toc, "the pane closes once you pick something");
         assert!(a.current_source_line() > 40, "jumped to the heading");
+    }
+
+    #[test]
+    fn closing_the_contents_pane_comes_back_to_what_was_being_read() {
+        // A reader opens the contents to decide whether to move, and deciding
+        // against it should not cost them their place.
+        let mut a = sectioned_doc();
+        press(&mut a, 'G');
+        let before = a.current_source_line();
+        assert!(before > 1, "the test needs to start away from the top");
+        press(&mut a, 'T');
+        press(&mut a, 'T');
+        assert!(!a.toc);
+        assert_eq!(a.current_source_line(), before);
+    }
+
+    #[test]
+    fn closing_the_help_comes_back_to_what_was_being_read() {
+        let mut a = sectioned_doc();
+        press(&mut a, 'G');
+        let before = a.current_source_line();
+        press(&mut a, 'H');
+        press(&mut a, 'H');
+        assert_eq!(a.current_source_line(), before);
+    }
+
+    #[test]
+    fn a_pane_opened_from_a_pane_still_comes_back_to_the_document() {
+        // `H` then `T` then closing the contents: the place to return to is
+        // the one the help was opened from, not the row the help was left on.
+        let mut a = sectioned_doc();
+        press(&mut a, 'G');
+        let before = a.current_source_line();
+        press(&mut a, 'H');
+        press(&mut a, 'd');
+        press(&mut a, 'T');
+        press(&mut a, 'T');
+        assert!(!a.toc && !a.help);
+        assert_eq!(a.current_source_line(), before);
+    }
+
+    #[test]
+    fn picking_an_entry_beats_coming_back_to_where_the_pane_was_opened() {
+        let mut a = sectioned_doc();
+        press(&mut a, 'G');
+        press(&mut a, 'T');
+        let url = a.active_doc().links[0].url.clone();
+        a.open(&url);
+        assert_eq!(a.current_source_line(), 1, "went to the first heading");
+        press(&mut a, 'T');
+        press(&mut a, 'T');
+        assert_eq!(a.current_source_line(), 1, "and stayed there");
+    }
+
+    #[test]
+    fn cycling_the_theme_in_the_contents_pane_comes_back_to_the_document() {
+        // The pane cannot survive a reparse, so dropping it is a close.
+        let mut a = sectioned_doc();
+        press(&mut a, 'G');
+        let before = a.current_source_line();
+        press(&mut a, 'T');
+        press(&mut a, 't');
+        assert!(!a.toc);
+        assert_eq!(a.current_source_line(), before);
     }
 
     #[test]
