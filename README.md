@@ -818,7 +818,7 @@ that declining beats drawing something subtly wrong.
 - [x] A statement ending in `;`, which mermaid's own documentation writes,
       makes a second node: `A --> B;` and `B --> C;` draw four boxes, `B` and
       `B;` among them.
-- [ ] A node whose id starts with `end`, `subgraph`, or `classDef` declines the
+- [x] A node whose id starts with `end`, `subgraph`, or `classDef` declines the
       whole diagram — `endpoint[X] --> B` renders as source. A sequence diagram
       does the same for a participant called `loopback` or `optional`.
 - [ ] An edge label is drawn on the row the parent's connector occupies, so it
