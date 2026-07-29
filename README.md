@@ -592,11 +592,14 @@ there is no blank to put it in.
 
 ```toml
 [heading]
-h1 = { fg = "#bd93f9", bold = true, border = "#6272a4" }
-h2 = { border = true }     # derived colour
-h3 = { bar = true }
-h6 = { border = false }
+h1 = { fg = "#bd93f9", bold = true, border = true, bar = true }
+h2 = { fg = "#8be9fd", bold = true, border = "#6272a4" }   # explicit colour
+h3 = { fg = "#50fa7b", bold = true }
 ```
+
+Only the levels drawn large can carry either, since the bitmap is the only place
+with room for them: `h3 = { bar = true }` parses and draws nothing. That is a
+defect and is listed below.
 
 `true` takes the heading's own colour at 55%, which is the default for the two
 levels drawn large. Deriving it rather than requiring it written down is the
@@ -650,6 +653,26 @@ The default theme is `terminal`, which sets no background color and inherits
 your terminal's palette. This avoids fighting WezTerm's transparency and
 background image settings. Named themes paint backgrounds only when explicitly
 selected.
+
+The bundled six, all rendering the same document:
+
+<table>
+<tr>
+<td width="50%"><b>dracula</b><br><img src="doc/themes/dracula.png" alt="mdroll with the dracula theme"></td>
+<td width="50%"><b>terminal</b> (default)<br><img src="doc/themes/terminal.png" alt="mdroll with the terminal theme"></td>
+</tr>
+<tr>
+<td><b>nord</b><br><img src="doc/themes/nord.png" alt="mdroll with the nord theme"></td>
+<td><b>gruvbox</b><br><img src="doc/themes/gruvbox.png" alt="mdroll with the gruvbox theme"></td>
+</tr>
+<tr>
+<td><b>solarized-dark</b><br><img src="doc/themes/solarized-dark.png" alt="mdroll with the solarized-dark theme"></td>
+<td><b>solarized-light</b><br><img src="doc/themes/solarized-light.png" alt="mdroll with the solarized-light theme"></td>
+</tr>
+</table>
+
+Captured in kitty, so the headings are bitmaps: `dracula` is the one theme that
+uses both decorations, and the rest carry the default border on `h1` and `h2`.
 
 #### Writing one
 
