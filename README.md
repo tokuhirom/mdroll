@@ -985,12 +985,17 @@ And one left over from that last one:
 
 And one found while fixing it:
 
-- [ ] `flowchart LR` has its own version of that collision, and a worse one.
+- [x] `flowchart LR` has its own version of that collision, and a worse one.
       The same four edges lose two labels outright and show the surviving two
       against the wrong edges, because a sideways label is written at one end of
       its own connector and several connectors arriving at one box share that
       row. The fix above does not reach it: that one stacks rows above the bus a
       fan hangs its children from, and `LR` has no bus to stack above.
+- [ ] Neither fix makes a label say *which* edge it belongs to where two of them
+      end up side by side; it only stops one being drawn over the other. Two
+      edges arriving at one box genuinely share the row they arrive on, and
+      short of routing them apart there is nowhere a label could sit that
+      belongs to one and not the other.
 
 ### v1.6 — Themes
 
