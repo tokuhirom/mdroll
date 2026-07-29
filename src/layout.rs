@@ -495,17 +495,21 @@ impl<'a> Ctx<'a> {
 
         let start = block.source_range.start;
         let mut source = start;
-        let emit_rule = |ctx: &mut Self, text: String, source: usize| {
-            let mut spans = ctx.lead_spans(block, ctx.lines.is_empty());
+        // `first` is the first row *of this block*, which is where a list
+        // marker or a footnote label belongs. Asking whether the document has
+        // any lines yet answers a different question, and gets it right only
+        // for a table that opens the file.
+        let emit_rule = |ctx: &mut Self, text: String, source: usize, first: bool| {
+            let mut spans = ctx.lead_spans(block, first);
             spans.push(Span::new(text, border));
             ctx.push(Line::new(source, idx, spans));
         };
 
-        emit_rule(self, rule("┌", "┬", "┐", &widths), source);
+        emit_rule(self, rule("┌", "┬", "┐", &widths), source, true);
         if !table.head.is_empty() {
             self.table_row(idx, block, &table.head, &widths, &table.align, source);
             source += 1;
-            emit_rule(self, rule("├", "┼", "┤", &widths), source);
+            emit_rule(self, rule("├", "┼", "┤", &widths), source, false);
             source += 1;
         }
         for row in &table.rows {
@@ -516,6 +520,7 @@ impl<'a> Ctx<'a> {
             self,
             rule("└", "┴", "┘", &widths),
             source.min(block.source_range.end.saturating_sub(1)),
+            false,
         );
     }
 
@@ -806,6 +811,31 @@ mod tests {
         for line in &out {
             assert!(line.chars().count() <= 12, "{line:?}");
         }
+    }
+
+    #[test]
+    fn a_table_keeps_its_list_marker_wherever_it_sits() {
+        // The marker belongs to the first row of the block. Deciding that from
+        // whether the document has any lines yet gets it right only for a table
+        // that happens to open the file.
+        let marker_of = |src: &str| {
+            let doc = crate::parse::parse(src, &Theme::default());
+            let lines = layout(
+                &doc,
+                Viewport::new(40, 20),
+                &Options::default(),
+                &Theme::default(),
+            );
+            let row = lines.iter().find(|l| l.text().contains('┌')).unwrap();
+            row.text().chars().next().unwrap()
+        };
+        let table = "- | a | b |\n  |---|---|\n  | 1 | 2 |\n";
+        assert_eq!(marker_of(table), '•', "at the top of the document");
+        assert_eq!(
+            marker_of(&format!("# Heading\n\n{table}")),
+            '•',
+            "and after something else"
+        );
     }
 
     #[test]
