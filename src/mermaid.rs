@@ -207,6 +207,16 @@ fn split_statements(line: &str) -> Vec<&str> {
     out
 }
 
+/// Whether a statement opens with `word` as a word, rather than merely
+/// beginning with those letters.
+///
+/// `endpoint[X] --> B` is a node called `endpoint`, and reading it as the `end`
+/// of a subgraph declined a chart there was nothing wrong with.
+fn keyword(line: &str, word: &str) -> bool {
+    line.strip_prefix(word)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+}
+
 pub fn parse_flowchart(code: &str) -> Option<Flowchart> {
     let mut lines = code.lines().map(str::trim).flat_map(split_statements);
 
@@ -230,14 +240,12 @@ pub fn parse_flowchart(code: &str) -> Option<Flowchart> {
     for line in lines {
         // Anything that changes the *shape* of the diagram, rather than its
         // styling, is a reason to decline the whole thing.
-        if line.starts_with("subgraph") || line.starts_with("end") {
+        if keyword(line, "subgraph") || keyword(line, "end") {
             return None;
         }
-        if line.starts_with("classDef")
-            || line.starts_with("class ")
-            || line.starts_with("style ")
-            || line.starts_with("click ")
-            || line.starts_with("linkStyle")
+        if ["classDef", "class", "style", "click", "linkStyle"]
+            .iter()
+            .any(|word| keyword(line, word))
         {
             continue;
         }
@@ -865,14 +873,19 @@ mod sequence {
                 continue;
             }
             // Control-flow blocks change the shape of the diagram, so decline.
-            if line.starts_with("loop")
-                || line.starts_with("alt")
-                || line.starts_with("opt")
-                || line.starts_with("par")
-                || line.starts_with("else")
-                || line == "end"
-                || line.starts_with("activate")
-                || line.starts_with("deactivate")
+            // As words, though: `optional->>B: hi` names a participant.
+            if [
+                "loop",
+                "alt",
+                "opt",
+                "par",
+                "else",
+                "end",
+                "activate",
+                "deactivate",
+            ]
+            .iter()
+            .any(|word| keyword(line, word))
             {
                 return None;
             }
@@ -1173,6 +1186,32 @@ mod tests {
     #[test]
     fn a_cycle_is_declined_rather_than_drawn_wrong() {
         assert!(render("flowchart TD\n A --> B\n B --> A\n", &CALC).is_none());
+    }
+
+    #[test]
+    fn a_node_named_after_a_keyword_is_still_a_node() {
+        // Every one of these was declined and shown as source, because the id
+        // begins with the letters of a word that means something else.
+        for code in [
+            "flowchart TD\n endpoint[X] --> B\n",
+            "flowchart TD\n subgraphs[X] --> B\n",
+            "flowchart TD\n classification[X] --> B\n",
+            "flowchart TD\n styles[X] --> B\n",
+            "flowchart TD\n clicks[X] --> B\n",
+        ] {
+            let chart = parse_flowchart(code).unwrap_or_else(|| panic!("declined:\n{code}"));
+            assert_eq!(chart.nodes.len(), 2, "{code}");
+        }
+    }
+
+    #[test]
+    fn a_participant_named_after_a_keyword_is_still_a_participant() {
+        let out = rows("sequenceDiagram\n loopback->>optional: hi\n");
+        let text = out.join("\n");
+        assert!(
+            text.contains("loopback") && text.contains("optional"),
+            "{text}"
+        );
     }
 
     #[test]
