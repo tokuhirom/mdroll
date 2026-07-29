@@ -95,6 +95,11 @@ pub struct App {
     help_doc: Option<Document>,
     pub toc: bool,
     toc_doc: Option<Document>,
+    /// The source line the document was showing when a pane went over it, so
+    /// closing the pane comes back to it. `None` when no pane is open.
+    place: Option<usize>,
+    /// Where in the contents pane's own text the entry for [`App::place`] is.
+    toc_here: Option<usize>,
 
     pub matches: Vec<Match>,
     pub current_match: Option<usize>,
@@ -217,6 +222,8 @@ impl App {
             help_doc: None,
             toc: false,
             toc_doc: None,
+            place: None,
+            toc_here: None,
             matches: Vec::new(),
             current_match: None,
             last_query: String::new(),
@@ -715,12 +722,18 @@ impl App {
         self.measure_images();
         self.help_doc = None;
         self.toc_doc = None;
-        self.toc = false;
+        let closed_the_contents = std::mem::take(&mut self.toc);
         self.prepare_diagrams();
         if self.help {
             self.help_doc = Some(crate::parse::parse(HELP, &self.theme));
         }
-        self.relayout();
+        // Cycling the theme with the contents open drops the pane, which is
+        // the same as closing it: come back to what was being read.
+        if closed_the_contents {
+            self.leave_pane();
+        } else {
+            self.relayout();
+        }
     }
 
     pub fn toggle_double_height(&mut self) {
@@ -749,17 +762,42 @@ impl App {
         });
     }
 
+    /// Note where the document is before a pane covers it. A pane opened from
+    /// another pane changes nothing: the place to come back to is the one the
+    /// first of them was opened from.
+    fn enter_pane(&mut self) {
+        if !self.overlaid() {
+            self.place = Some(self.current_source_line());
+        }
+    }
+
+    /// Put the document back where [`App::enter_pane`] left it. A pane is a
+    /// look at something else, not a way of losing your place in what you were
+    /// reading — and the contents pane is where a reader goes precisely when
+    /// they are not sure they want to move at all.
+    fn leave_pane(&mut self) {
+        let place = self.place.take();
+        self.relayout();
+        self.scroll = match place {
+            Some(line) => row_for_source_line(&self.lines, line).min(self.max_scroll()),
+            None => 0,
+        };
+    }
+
     pub fn toggle_help(&mut self) {
+        self.enter_pane();
         self.help = !self.help;
+        self.cursor = None;
         if self.help {
             self.toc = false;
             if self.help_doc.is_none() {
                 self.help_doc = Some(crate::parse::parse(HELP, &self.theme));
             }
+            self.scroll = 0;
+            self.relayout();
+        } else {
+            self.leave_pane();
         }
-        self.scroll = 0;
-        self.cursor = None;
-        self.relayout();
     }
 
     /// A table of contents, built as a Markdown document of links.
@@ -767,23 +805,60 @@ impl App {
     /// Reusing the document machinery means the link picker, the block cursor,
     /// and `o` all work in the contents pane without any new modes.
     pub fn toggle_toc(&mut self) {
+        self.enter_pane();
         self.toc = !self.toc;
+        self.cursor = None;
         if self.toc {
             self.help = false;
             let markdown = self.toc_markdown();
             if markdown.is_none() {
                 self.toc = false;
+                self.place = None;
                 self.toast("no headings");
                 return;
             }
-            self.toc_doc = Some(crate::parse::parse(&markdown.unwrap(), &self.theme));
+            let (markdown, entries) = markdown.unwrap();
+            // Which entry the reader is already inside: the last heading at or
+            // above where the document was left. Above the first heading there
+            // is no entry to mark, and nothing is marked.
+            let place = self.place.unwrap_or(1);
+            self.toc_here = entries
+                .iter()
+                .rev()
+                .find(|(heading, _)| *heading <= place)
+                .map(|(_, entry)| *entry);
+            self.toc_doc = Some(crate::parse::parse(&markdown, &self.theme));
+            self.scroll = 0;
+            self.relayout();
+            // A contents longer than the screen opens on the part of itself
+            // the reader is in, not on its own first line.
+            if let Some(row) = self.toc_here_row() {
+                self.ensure_visible(row);
+            }
+        } else {
+            self.toc_here = None;
+            self.leave_pane();
         }
-        self.scroll = 0;
-        self.cursor = None;
-        self.relayout();
     }
 
-    fn toc_markdown(&self) -> Option<String> {
+    /// The row of the contents pane holding the entry the reader came from.
+    ///
+    /// Guarded on the pane being the thing on screen: every other way of
+    /// leaving it clears the flag, and a stale row here would mark a line of
+    /// the document instead.
+    fn toc_here_row(&self) -> Option<usize> {
+        if !self.toc {
+            return None;
+        }
+        let line = self.toc_here?;
+        Some(row_for_source_line(&self.lines, line))
+    }
+
+    /// The contents as Markdown, with the source line each entry lands on in
+    /// the document being built paired with the line of the heading it names.
+    /// The pane is drawn by the ordinary machinery, so pointing at an entry
+    /// means pointing at a line of this text.
+    fn toc_markdown(&self) -> Option<(String, Vec<(usize, usize)>)> {
         let headings: Vec<(u8, String, usize)> = self
             .doc
             .blocks
@@ -802,6 +877,11 @@ impl App {
 ",
         );
         let top = headings.iter().map(|(l, _, _)| *l).min().unwrap_or(1);
+        // The heading and the blank line under it, so the first entry is the
+        // third line. Counted rather than assumed, because the entry a reader
+        // is on is found by its line in this text.
+        let mut entry_line = 2;
+        let mut entries = Vec::with_capacity(headings.len());
         for (level, text, line) in headings {
             let indent = "  ".repeat((level.saturating_sub(top)) as usize);
             let label = text.replace(['[', ']'], "");
@@ -809,8 +889,10 @@ impl App {
                 "{indent}- [{label}](#line-{line})
 "
             ));
+            entry_line += 1;
+            entries.push((line, entry_line));
         }
-        Some(out)
+        Some((out, entries))
     }
 
     /// The innermost heading at or above the top of the screen.
@@ -1069,6 +1151,10 @@ impl App {
     fn jump_to_source_line(&mut self, line: usize) {
         self.toc = false;
         self.help = false;
+        // A reader who picked an entry has said where they want to be, so the
+        // place the pane was opened from is no longer anywhere to come back to.
+        self.place = None;
+        self.toc_here = None;
         self.cursor = None;
         self.relayout();
         self.scroll = row_for_source_line(&self.lines, line).min(self.max_scroll());
@@ -1202,7 +1288,8 @@ impl App {
     }
 
     pub fn highlights(&self) -> Vec<Highlight> {
-        self.matches
+        let mut out: Vec<Highlight> = self
+            .matches
             .iter()
             .enumerate()
             .map(|(i, m)| Highlight {
@@ -1215,7 +1302,19 @@ impl App {
                     self.theme.search_match
                 },
             })
-            .collect()
+            .collect();
+        // The entry the reader is inside, marked the way the block cursor
+        // marks the block they are on: the pane lists thirty headings and the
+        // question it is opened with is often which of them is this one.
+        if let Some(row) = self.toc_here_row() {
+            out.push(Highlight {
+                line: row,
+                start: 0,
+                end: usize::MAX,
+                style: self.theme.cursor,
+            });
+        }
+        out
     }
 
     // ---- feedback --------------------------------------------------------
@@ -1789,6 +1888,15 @@ mod tests {
         app(&body)
     }
 
+    /// Long enough to scroll, with a heading every few lines so the contents
+    /// pane has something to say.
+    fn sectioned_doc() -> App {
+        let body: String = (1..=30)
+            .map(|i| format!("## Section {i}\n\nbody of section {i}\n\n"))
+            .collect();
+        app(&body)
+    }
+
     #[test]
     fn opening_a_badge_goes_where_it_links_not_to_its_picture() {
         let app = app("[![Build](b.svg)](https://a.example)\n");
@@ -2234,6 +2342,134 @@ mod tests {
         a.open(&url);
         assert!(!a.toc, "the pane closes once you pick something");
         assert!(a.current_source_line() > 40, "jumped to the heading");
+    }
+
+    /// The text of the row the contents pane marks as where the reader is.
+    fn marked_entry(a: &App) -> Option<String> {
+        let highlights = a.highlights();
+        let marked: Vec<&Highlight> = highlights
+            .iter()
+            .filter(|h| h.start == 0 && h.end == usize::MAX)
+            .collect();
+        assert!(marked.len() <= 1, "one place, or none");
+        marked.first().map(|h| a.lines[h.line].text())
+    }
+
+    #[test]
+    fn the_contents_pane_marks_the_section_the_reader_is_in() {
+        let mut a = sectioned_doc();
+        // Somewhere inside the third section, not on its heading.
+        let line = 4 * 3 - 1;
+        a.scroll = row_for_source_line(&a.lines, line);
+        press(&mut a, 'T');
+        let entry = marked_entry(&a).expect("something is marked");
+        assert!(
+            entry.contains("Section 3") && !entry.contains("Section 30"),
+            "{entry:?}"
+        );
+    }
+
+    #[test]
+    fn the_contents_pane_marks_nothing_above_the_first_heading() {
+        // A document that opens with prose has a place with no entry to it,
+        // and inventing one would put the reader in a section they are not in.
+        let mut a = app("intro\n\nmore intro\n\n# First\n\nbody\n");
+        press(&mut a, 'T');
+        assert_eq!(marked_entry(&a), None);
+    }
+
+    #[test]
+    fn the_marked_entry_is_on_screen_when_the_contents_opens() {
+        // Thirty headings in a ten-row screen: the entry is off the first
+        // screenful, and a contents that opens at its own top has not answered
+        // the question it was opened with.
+        let mut a = sectioned_doc();
+        press(&mut a, 'G');
+        press(&mut a, 'T');
+        let row = a.highlights()[0].line;
+        let last = a.scroll + a.lines_fitting(a.scroll, a.screen.viewport().rows);
+        assert!(
+            row >= a.scroll && row < last,
+            "row {row} outside {}..{last}",
+            a.scroll
+        );
+    }
+
+    #[test]
+    fn the_mark_goes_away_with_the_pane() {
+        let mut a = sectioned_doc();
+        press(&mut a, 'G');
+        press(&mut a, 'T');
+        assert!(marked_entry(&a).is_some());
+        press(&mut a, 'T');
+        assert!(
+            a.highlights().is_empty(),
+            "nothing of the pane is left on the document"
+        );
+    }
+
+    #[test]
+    fn closing_the_contents_pane_comes_back_to_what_was_being_read() {
+        // A reader opens the contents to decide whether to move, and deciding
+        // against it should not cost them their place.
+        let mut a = sectioned_doc();
+        press(&mut a, 'G');
+        let before = a.current_source_line();
+        assert!(before > 1, "the test needs to start away from the top");
+        press(&mut a, 'T');
+        press(&mut a, 'T');
+        assert!(!a.toc);
+        assert_eq!(a.current_source_line(), before);
+    }
+
+    #[test]
+    fn closing_the_help_comes_back_to_what_was_being_read() {
+        let mut a = sectioned_doc();
+        press(&mut a, 'G');
+        let before = a.current_source_line();
+        press(&mut a, 'H');
+        press(&mut a, 'H');
+        assert_eq!(a.current_source_line(), before);
+    }
+
+    #[test]
+    fn a_pane_opened_from_a_pane_still_comes_back_to_the_document() {
+        // `H` then `T` then closing the contents: the place to return to is
+        // the one the help was opened from, not the row the help was left on.
+        let mut a = sectioned_doc();
+        press(&mut a, 'G');
+        let before = a.current_source_line();
+        press(&mut a, 'H');
+        press(&mut a, 'd');
+        press(&mut a, 'T');
+        press(&mut a, 'T');
+        assert!(!a.toc && !a.help);
+        assert_eq!(a.current_source_line(), before);
+    }
+
+    #[test]
+    fn picking_an_entry_beats_coming_back_to_where_the_pane_was_opened() {
+        let mut a = sectioned_doc();
+        press(&mut a, 'G');
+        press(&mut a, 'T');
+        let url = a.active_doc().links[0].url.clone();
+        a.open(&url);
+        assert_eq!(a.current_source_line(), 1, "went to the first heading");
+        press(&mut a, 'T');
+        press(&mut a, 'T');
+        assert_eq!(a.current_source_line(), 1, "and stayed there");
+    }
+
+    #[test]
+    fn cycling_the_theme_in_the_contents_pane_comes_back_to_the_document() {
+        // The pane cannot survive a reparse, so dropping it is a close.
+        let mut a = sectioned_doc();
+        press(&mut a, 'G');
+        let before = a.current_source_line();
+        press(&mut a, 'T');
+        press(&mut a, 't');
+        assert!(!a.toc);
+        assert_eq!(a.current_source_line(), before);
     }
 
     #[test]
