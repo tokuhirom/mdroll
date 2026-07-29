@@ -1444,6 +1444,14 @@ impl App {
         }
 
         let Some(action) = self.keymap.lookup(&key) else {
+            // A key that does nothing and says nothing is indistinguishable
+            // from a viewer that has stopped responding, and it is the moment
+            // a reader is most likely to want the list of keys that do work.
+            let name = crate::keys::describe_key(&key);
+            match self.help_key() {
+                Some(help) => self.toast(&format!("{name} does nothing — {help} for help")),
+                None => self.toast(&format!("{name} does nothing")),
+            }
             return Ok(());
         };
         self.act(out, action)
@@ -2253,6 +2261,39 @@ mod tests {
         a.toast("hi");
         assert!(!a.toast_expired());
         assert_eq!(a.bottom_row().len(), 1);
+    }
+
+    #[test]
+    fn a_key_that_is_bound_to_nothing_says_so_and_says_where_the_help_is() {
+        let mut a = app("body\n");
+        press(&mut a, 'x');
+        let text: String = a.bottom_row().iter().map(|s| s.text.as_str()).collect();
+        assert!(
+            text.contains('x') && text.contains('H'),
+            "silence reads as a viewer that has stopped responding: {text:?}"
+        );
+    }
+
+    #[test]
+    fn a_key_that_is_bound_says_nothing_about_the_help() {
+        let mut a = app("body\n");
+        press(&mut a, 'j');
+        assert!(
+            a.bottom_row().is_empty(),
+            "a key that worked has nothing to report"
+        );
+    }
+
+    #[test]
+    fn an_abandoned_yank_reports_the_key_it_was_abandoned_for() {
+        // `y` then something that is neither `y`, `c` nor `p` is not a yank,
+        // and the key is handled as itself — including when it is bound to
+        // nothing, where saying so is the whole point.
+        let mut a = app("body\n");
+        press(&mut a, 'y');
+        press(&mut a, 'x');
+        let text: String = a.bottom_row().iter().map(|s| s.text.as_str()).collect();
+        assert!(text.contains('x'), "{text:?}");
     }
 
     #[test]
