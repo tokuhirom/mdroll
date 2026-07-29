@@ -359,6 +359,12 @@ written — one parent fanning out, several parents merging into one child, a
 diamond, or all four of the edges above — the picture says exactly what it
 means and is drawn as before.
 
+Two runs can also be threaded through each other for no reason the graph gives,
+because the order of a rank is the order its nodes were written in. Where that
+is what stops a chart being drawn, the ranks are reordered until it can be.
+The order in the document is preferred and kept whenever it works, so a diagram
+that came out one way yesterday comes out the same way today.
+
 ```console
 $ mise use -g npm:@mermaid-js/mermaid-cli
 $ npx puppeteer browsers install chrome-headless-shell
@@ -1103,12 +1109,14 @@ the edges, and sometimes there is an edge in the picture that nobody wrote.
       putting every bend in one place. That is also the only thing that would
       let a label belong to one edge and not the other, which is the v1.5 item
       above.
-- [ ] Ordering within a rank is the order the edges were written in, so two
+- [x] Ordering within a rank is the order the edges were written in, so two
       runs can interleave when nothing about the graph makes them. `A --> D`
       then `B --> C`, where `C` and `D` were already introduced in the other
       order, is declined for a crossing that swapping the two would remove.
       A sweep that orders each rank to reduce crossings would give some of these
-      charts back.
+      charts back — as a repair for a chart that will not otherwise draw, not
+      as a policy applied to every chart, so that a diagram that came out one
+      way yesterday comes out the same way today.
 - [x] In `flowchart LR` the corner where a connector turns is drawn hard, so
       where two turn in the same column the second erases the first's. In a
       diamond, `A`'s connector turns at `┐` where `┤` belongs, and the run

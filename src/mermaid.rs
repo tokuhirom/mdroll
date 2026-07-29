@@ -544,10 +544,165 @@ pub fn draw_flowchart(chart: &Flowchart, calc: &WidthCalc) -> Option<Vec<String>
     let label_width = |i: usize| calc.str(&chart.nodes[i].label);
     let box_w = |i: usize| label_width(i) + 4;
 
+    // Where each box sits along the axis a band's runs travel, which is what
+    // says whether two of those runs overlap.
+    let across = |by_rank: &[Vec<usize>]| -> Vec<usize> {
+        match chart.direction {
+            Direction::TopDown => column_starts(by_rank, chart.nodes.len(), &box_w)
+                .0
+                .iter()
+                .enumerate()
+                .map(|(i, x)| x + box_w(i) / 2)
+                .collect(),
+            Direction::LeftRight => row_starts(by_rank, chart.nodes.len())
+                .0
+                .iter()
+                .map(|y| y + 1)
+                .collect(),
+        }
+    };
+
+    // The document's own order is kept wherever the chart can be drawn in it,
+    // so a diagram that came out one way yesterday comes out the same way
+    // today. Reordering a rank is a repair for a band whose runs would say
+    // more than the document does, not a policy applied to every chart.
+    if !bus_runs_are_honest(chart, &rank, |i| across(&by_rank)[i]) {
+        by_rank = untangle(chart, &rank, &by_rank, &across)?;
+    }
+
     match chart.direction {
         Direction::TopDown => draw_top_down(chart, &by_rank, &rank, calc, box_w),
         Direction::LeftRight => draw_left_right(chart, &by_rank, &rank, calc, box_w),
     }
+}
+
+/// Where each box starts across the canvas, and how wide the widest rank is.
+///
+/// The widest rank sets the canvas width and every other rank is centred in it,
+/// so a box's column depends on the order of its own rank and on the widths of
+/// every rank. Worked out here rather than in the drawing because whether an
+/// order can be drawn at all is decided before there is anything to draw with.
+fn column_starts(
+    by_rank: &[Vec<usize>],
+    nodes: usize,
+    box_w: &impl Fn(usize) -> usize,
+) -> (Vec<usize>, usize) {
+    let rank_widths: Vec<usize> = by_rank
+        .iter()
+        .map(|nodes| {
+            nodes.iter().map(|i| box_w(*i)).sum::<usize>() + GAP * nodes.len().saturating_sub(1)
+        })
+        .collect();
+    let content_width = rank_widths.iter().copied().max().unwrap_or(0);
+    let mut starts = vec![0usize; nodes];
+    for (r, ns) in by_rank.iter().enumerate() {
+        let mut x = (content_width - rank_widths[r]) / 2;
+        for &i in ns {
+            starts[i] = x;
+            x += box_w(i) + GAP;
+        }
+    }
+    (starts, content_width)
+}
+
+/// The same for a sideways chart, where a rank is a column of boxes and what
+/// varies is which row each one is on.
+fn row_starts(by_rank: &[Vec<usize>], nodes: usize) -> (Vec<usize>, usize) {
+    let rank_heights: Vec<usize> = by_rank
+        .iter()
+        .map(|ns| ns.len() * 3 + ns.len().saturating_sub(1))
+        .collect();
+    let content_height = rank_heights.iter().copied().max().unwrap_or(3);
+    let mut starts = vec![0usize; nodes];
+    for (r, ns) in by_rank.iter().enumerate() {
+        let mut y = (content_height - rank_heights[r]) / 2;
+        for &i in ns {
+            starts[i] = y;
+            y += 4;
+        }
+    }
+    (starts, content_height)
+}
+
+/// Reorder the ranks until no band's runs interleave, or give up.
+///
+/// Two runs overlap when the boxes they join are threaded through each other,
+/// and that is often nothing the graph asked for: the order within a rank is
+/// the order the nodes were written in, and `C --> E`, `D --> E`, `A --> D`,
+/// `B --> C` introduces `C` before `D` and then hangs them off parents in the
+/// other order. Swapping the pair is all it takes, and this is the sweep that
+/// finds it — each rank ordered by where its neighbours in the rank before it
+/// sit, which is the standard way of untangling a layered drawing.
+///
+/// Whether it worked is not assumed. Some bands are tangled by the graph and
+/// not by the order — several parents reaching an overlapping set of children
+/// is one no sweep can separate — and there the chart is declined as before.
+fn untangle(
+    chart: &Flowchart,
+    rank: &[usize],
+    by_rank: &[Vec<usize>],
+    across: &impl Fn(&[Vec<usize>]) -> Vec<usize>,
+) -> Option<Vec<Vec<usize>>> {
+    let mut order = by_rank.to_vec();
+    // Down, then back up, then down again: one pass settles the common case,
+    // and the return passes catch a rank whose own order was what put the one
+    // after it wrong.
+    for pass in 0..3 {
+        if pass % 2 == 0 {
+            for r in 1..order.len() {
+                sort_by_neighbours(chart, rank, &mut order, r, true);
+            }
+        } else {
+            for r in (0..order.len().saturating_sub(1)).rev() {
+                sort_by_neighbours(chart, rank, &mut order, r, false);
+            }
+        }
+        let centres = across(&order);
+        if bus_runs_are_honest(chart, rank, |i| centres[i]) {
+            return Some(order);
+        }
+    }
+    None
+}
+
+/// Order one rank by where each of its nodes' neighbours in the next rank up
+/// (or down) sit, leaving a node with no neighbours there where it is.
+fn sort_by_neighbours(
+    chart: &Flowchart,
+    rank: &[usize],
+    order: &mut [Vec<usize>],
+    r: usize,
+    upwards: bool,
+) {
+    let other = if upwards { r - 1 } else { r + 1 };
+    let place = |n: usize| order[other].iter().position(|m| *m == n);
+    // The mean of the neighbours' places, kept as a fraction so that ranks of
+    // different sizes compare without rounding one of them into a tie.
+    let key = |i: usize, at: usize| -> (usize, usize) {
+        let places: Vec<usize> = chart
+            .edges
+            .iter()
+            .filter_map(|e| {
+                let (near, far) = if upwards {
+                    (e.to, e.from)
+                } else {
+                    (e.from, e.to)
+                };
+                (near == i && rank[far] == other).then(|| place(far))?
+            })
+            .collect();
+        match places.len() {
+            0 => (at, 1),
+            n => (places.iter().sum::<usize>(), n),
+        }
+    };
+    let mut keyed: Vec<(usize, (usize, usize))> = order[r]
+        .iter()
+        .enumerate()
+        .map(|(at, &i)| (i, key(i, at)))
+        .collect();
+    keyed.sort_by(|a, b| (a.1.0 * b.1.1).cmp(&(b.1.0 * a.1.1)));
+    order[r] = keyed.into_iter().map(|(i, _)| i).collect();
 }
 
 fn draw_top_down(
@@ -558,13 +713,7 @@ fn draw_top_down(
     box_w: impl Fn(usize) -> usize,
 ) -> Option<Vec<String>> {
     // Widest rank sets the canvas width; every other rank is centred in it.
-    let rank_widths: Vec<usize> = by_rank
-        .iter()
-        .map(|nodes| {
-            nodes.iter().map(|i| box_w(*i)).sum::<usize>() + GAP * nodes.len().saturating_sub(1)
-        })
-        .collect();
-    let content_width = rank_widths.iter().copied().max().unwrap_or(0);
+    let (starts, content_width) = column_starts(by_rank, chart.nodes.len(), &box_w);
 
     // Edges that skip a rank get their own lane to the right of every box, so
     // a long connector never has to cross a node.
@@ -575,29 +724,17 @@ fn draw_top_down(
         })
         .collect();
 
-    let mut boxes: Vec<Box> = Vec::with_capacity(chart.nodes.len());
-    boxes.extend((0..chart.nodes.len()).map(|_| Box {
-        x: 0,
-        y: 0,
-        w: 0,
-        h: 0,
-    }));
-
     // Columns first. Where a box sits across the canvas does not depend on how
     // tall the bands between the ranks turn out to be, and the bands cannot be
     // measured until the labels have columns to be placed against.
-    for (r, nodes) in by_rank.iter().enumerate() {
-        let mut x = (content_width - rank_widths[r]) / 2;
-        for &i in nodes {
-            let w = box_w(i);
-            boxes[i] = Box { x, y: 0, w, h: 3 };
-            x += w + GAP;
-        }
-    }
-
-    if !bus_runs_are_honest(chart, rank, |i| boxes[i].center_x()) {
-        return None;
-    }
+    let mut boxes: Vec<Box> = (0..chart.nodes.len())
+        .map(|i| Box {
+            x: starts[i],
+            y: 0,
+            w: box_w(i),
+            h: 3,
+        })
+        .collect();
 
     // How many edges of this band each node is an end of. A label hangs off
     // whichever of its edge's two columns is that edge's alone, and these are
@@ -735,11 +872,7 @@ fn draw_left_right(
         .iter()
         .map(|nodes| nodes.iter().map(|i| box_w(*i)).max().unwrap_or(0))
         .collect();
-    let rank_heights: Vec<usize> = by_rank
-        .iter()
-        .map(|nodes| nodes.len() * 3 + nodes.len().saturating_sub(1))
-        .collect();
-    let content_height = rank_heights.iter().copied().max().unwrap_or(3);
+    let (starts, content_height) = row_starts(by_rank, chart.nodes.len());
 
     // An edge that skips a rank gets a lane below every box, the way the
     // top-down layout gives one a lane to the right. Drawn straight it would
@@ -755,12 +888,15 @@ fn draw_left_right(
     };
     let height = content_height + lanes;
 
+    // Rows before columns. Which row a label lands on decides which other
+    // labels it has to share space with, that decides how wide the run between
+    // two columns has to be, and only then is there an x to put a box at.
     let mut boxes: Vec<Box> = (0..chart.nodes.len())
-        .map(|_| Box {
+        .map(|i| Box {
             x: 0,
-            y: 0,
-            w: 0,
-            h: 0,
+            y: starts[i],
+            w: box_w(i),
+            h: 3,
         })
         .collect();
 
@@ -775,26 +911,6 @@ fn draw_left_right(
         }
     }
     let side = |edge: &Edge| label_at_left(chart.reversed, parents[edge.to], children[edge.from]);
-
-    // Rows before columns. Which row a label lands on decides which other
-    // labels it has to share space with, that decides how wide the run between
-    // two columns has to be, and only then is there an x to put a box at.
-    for (r, nodes) in by_rank.iter().enumerate() {
-        let mut y = (content_height - rank_heights[r]) / 2;
-        for &i in nodes {
-            boxes[i] = Box {
-                x: 0,
-                y,
-                w: box_w(i),
-                h: 3,
-            };
-            y += 4;
-        }
-    }
-
-    if !bus_runs_are_honest(chart, rank, |i| boxes[i].center_y()) {
-        return None;
-    }
 
     // A label is written into the connector itself, so the space between two
     // columns has to hold it along with the arrowhead and a cell of line on
@@ -2269,6 +2385,64 @@ mod tests {
                 assert!(render(&code, &CALC).is_none(), "drawn anyway:\n{code}");
             }
         }
+    }
+
+    #[test]
+    fn a_rank_written_in_the_wrong_order_is_swapped_rather_than_the_chart_declined() {
+        // `C` is introduced before `D` and then hung off the later of the two
+        // parents, so the two runs are threaded through each other for no
+        // reason the graph gives. Swapping the pair is the whole of the fix,
+        // and declining a chart over the order it happened to be written in
+        // says nothing true about it.
+        let code = "flowchart TD\n C --> E\n D --> E\n A --> D\n B --> C\n";
+        let out = rows(code);
+        let row = row_of(&out, "│ D │");
+        assert!(
+            row.find("│ D │") < row.find("│ C │"),
+            "not swapped: {row:?}\n{}",
+            out.join("\n")
+        );
+        // Each parent now drops straight onto its child, so only the band
+        // below them — where `D` and `C` do meet at `E` — has a bus in it.
+        let buses = out
+            .iter()
+            .filter(|r| r.contains('┬') || r.contains('┼') || r.contains('┴'))
+            .count();
+        assert_eq!(buses, 1, "still threaded:\n{}", out.join("\n"));
+
+        // Sideways it is the rows that were the wrong way round.
+        let out = rows("flowchart LR\n C --> E\n D --> E\n A --> D\n B --> C\n");
+        assert!(
+            row_of(&out, "│ A │").contains("│ D │"),
+            "A and D are not level:\n{}",
+            out.join("\n")
+        );
+    }
+
+    #[test]
+    fn untangling_one_band_does_not_tangle_the_one_after_it() {
+        // The sweep runs over every rank, so a swap made to separate two runs
+        // can put the rank below it wrong. Whether it worked is checked rather
+        // than assumed, and a chart is only drawn on an order that holds for
+        // every band of it at once.
+        let out = rows("flowchart TD\n C --> E\n D --> E\n F --> G\n A --> D\n B --> C\n");
+        let joined = out.join("\n");
+        for boxed in [
+            "│ A │",
+            "│ B │",
+            "│ C │",
+            "│ D │",
+            "│ E │",
+            "│ F │",
+            "│ G │",
+        ] {
+            assert!(joined.contains(boxed), "{boxed} missing:\n{joined}");
+        }
+        let row = row_of(&out, "│ D │");
+        assert!(
+            row.find("│ D │") < row.find("│ C │"),
+            "first band still threaded: {row:?}\n{joined}"
+        );
     }
 
     #[test]
