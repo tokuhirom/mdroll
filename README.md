@@ -856,6 +856,15 @@ Four more, found while fixing those rather than by reading:
       where a fan's edges are each on a row of their own, and at a join it is
       the other end that is.
 
+And one left over from that last one:
+
+- [ ] A label hangs off whichever end of its edge that edge has to itself, which
+      is the parent where several meet at a child and the child where one parent
+      has several. Where two parents each have two labelled children — `A` and
+      `B` both to `C` and `D` — every column and every row is shared by two
+      edges and there is nowhere left to put the fourth label. Two of the four
+      are drawn over.
+
 ---
 
 ## Non-goals
