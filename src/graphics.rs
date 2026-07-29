@@ -436,18 +436,25 @@ impl ImageStore {
         color: (u8, u8, u8),
         cols: u16,
         rows: u16,
+        decor: bigtext::HeadingDecor,
     ) -> Result<bool> {
         if !self.can_rasterize() || cols == 0 || rows == 0 {
             return Ok(false);
         }
-        let key = format!("{cols}x{rows}:{},{},{}:{text}", color.0, color.1, color.2);
+        // Decoration is part of the bitmap, so it is part of the key: two
+        // headings with the same words and colour but different rules under
+        // them are two different images.
+        let key = format!(
+            "{cols}x{rows}:{},{},{}:{:?}:{text}",
+            color.0, color.1, color.2, decor
+        );
         let kitty_id = match self.text.get(&key) {
             Some(id) => *id,
             None => {
                 let Some(png) = self
                     .big
                     .as_ref()
-                    .and_then(|r| r.render(text, color, cols, rows, self.cell))
+                    .and_then(|r| r.render(text, color, cols, rows, self.cell, decor))
                 else {
                     return Ok(false);
                 };

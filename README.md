@@ -245,6 +245,7 @@ the ones that depend on what the terminal can actually do.
 | Inline images | WezTerm, kitty, ghostty | Alt text, dimmed |
 | Big headings, via DECDHL | WezTerm, xterm, foot | see below |
 | Big headings, rasterized | kitty, ghostty | Colour and weight only |
+| Heading borders and bars | kitty, ghostty | Not drawn; they live in the bitmap |
 | Clickable links (OSC 8) | Most modern terminals | Use `F` or `o` instead |
 | Clipboard over SSH (OSC 52) | Most modern terminals | Enable it in your terminal |
 | Truecolor | `COLORTERM=truecolor` | Nearest 256-color match |
@@ -581,6 +582,37 @@ behind the glyphs, so the terminal's own background keeps showing through.
 
 The font comes from `fc-match sans-serif:bold`, falling back to a short list of
 usual locations. If nothing is found, big headings are simply not offered.
+
+A bitmap can also be decorated, which text cannot. GitHub gives `h1` and `h2` a
+bottom border, and here a rule under the heading costs nothing: the text uses
+0.78 of two rows the layout has already reserved, so the line goes in the space
+below it rather than on a row of its own. A bar down the left goes in the blank
+the margin leaves, and is dropped rather than drawn over the first letter when
+there is no blank to put it in.
+
+```toml
+[heading]
+h1 = { fg = "#bd93f9", bold = true, border = "#6272a4" }
+h2 = { border = true }     # derived colour
+h3 = { bar = true }
+h6 = { border = false }
+```
+
+`true` takes the heading's own colour at 55%, which is the default for the two
+levels drawn large. Deriving it rather than requiring it written down is the
+point: every theme that predates the feature, including any you already have,
+shows a border without being edited. Dimming scales the channels rather than
+blending towards the background, because `terminal` has no background colour to
+blend with.
+
+Unlike colour, decoration does **not** inherit down the levels. A theme naming
+only `h1`..`h3` gets `h3`'s colour on `h4`..`h6`, and asking for a bar on `h3`
+does not put one on every level beneath it.
+
+This is a place where terminals differ: decoration is drawn into the bitmap, so
+kitty and ghostty show it and the DECDHL terminals do not. Drawing a rule as
+text would cost a whole row, which is the more expensive of the two, and the
+capability table above already documents features that degrade elsewhere.
 
 ### Clipboard
 
@@ -942,12 +974,12 @@ a heading beyond its colour.
       so, but the keys between them are map entries, so `lnik = { … }` is
       accepted in silence and the link stays unstyled. Being told beats
       wondering why the colour did not take.
-- [ ] A heading can be coloured but not decorated. GitHub draws `h1` and `h2`
+- [x] A heading can be coloured but not decorated. GitHub draws `h1` and `h2`
       with a bottom border, which is the same pair this renderer draws at double
       height; a left bar is the other decoration worth having. Drawn into the
       bitmap they cost no rows, because the text occupies 0.78 of the two the
       layout already reserved.
-- [ ] Decoration colours have to be derived rather than enumerated. A theme
+- [x] Decoration colours have to be derived rather than enumerated. A theme
       written before the feature existed — including every theme a user already
       has — would otherwise show none of it, which is the same reason `h4`..`h6`
       inherit from the deepest level given.

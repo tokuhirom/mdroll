@@ -65,6 +65,82 @@ impl StyleSpec {
     }
 }
 
+/// A heading decoration as written in TOML: `border = true`, `border = false`,
+/// or `border = "#6272a4"`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum DecorSpec {
+    /// Draw it, or do not. Drawn without a color of its own, it takes the
+    /// heading's, dimmed.
+    On(bool),
+    Color(String),
+}
+
+/// A heading's style, plus the two decorations only a heading has.
+///
+/// The style fields are [`StyleSpec`]'s, written out again rather than
+/// flattened: `deny_unknown_fields` and `serde(flatten)` do not work together,
+/// and being told about a misspelled attribute is worth more than the ten lines.
+/// Keeping `border` and `bar` here rather than on `StyleSpec` means they are
+/// legal only where they mean something — `link = { border = … }` is refused.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HeadingSpec {
+    pub fg: Option<String>,
+    pub bg: Option<String>,
+    #[serde(default)]
+    pub bold: bool,
+    #[serde(default)]
+    pub italic: bool,
+    #[serde(default)]
+    pub underline: bool,
+    #[serde(default)]
+    pub strikethrough: bool,
+    #[serde(default)]
+    pub dim: bool,
+    #[serde(default)]
+    pub reverse: bool,
+    /// A rule under the heading, the way GitHub borders `h1` and `h2`.
+    pub border: Option<DecorSpec>,
+    /// A bar down its left side.
+    pub bar: Option<DecorSpec>,
+}
+
+impl HeadingSpec {
+    fn style(&self) -> StyleSpec {
+        StyleSpec {
+            fg: self.fg.clone(),
+            bg: self.bg.clone(),
+            bold: self.bold,
+            italic: self.italic,
+            underline: self.underline,
+            strikethrough: self.strikethrough,
+            dim: self.dim,
+            reverse: self.reverse,
+        }
+    }
+}
+
+/// A decoration that is drawn, and the color to draw it in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Decoration {
+    /// `None` means the heading's own color, dimmed. Derived rather than
+    /// written down so a theme that predates the feature — which is every theme
+    /// a user already has — still shows it.
+    pub color: Option<Color>,
+}
+
+fn decoration(spec: Option<&DecorSpec>, current: Option<Decoration>) -> Result<Option<Decoration>> {
+    match spec {
+        None => Ok(current),
+        Some(DecorSpec::On(false)) => Ok(None),
+        Some(DecorSpec::On(true)) => Ok(Some(Decoration { color: None })),
+        Some(DecorSpec::Color(s)) => Ok(Some(Decoration {
+            color: Some(parse_color(s)?),
+        })),
+    }
+}
+
 /// Parse `#rrggbb`, `#rgb`, a named ANSI color, or a 0-255 palette index.
 pub fn parse_color(s: &str) -> Result<Color> {
     let s = s.trim();
@@ -122,7 +198,7 @@ struct ThemeFile {
     #[serde(default)]
     code: BTreeMap<String, toml::Value>,
     #[serde(default)]
-    heading: BTreeMap<String, StyleSpec>,
+    heading: BTreeMap<String, HeadingSpec>,
     #[serde(default)]
     inline: BTreeMap<String, StyleSpec>,
     #[serde(default)]
@@ -144,6 +220,13 @@ pub struct Theme {
     pub syntect_theme: String,
 
     pub headings: [Style; 6],
+    /// A rule under each heading level, or `None` where none is drawn. Only the
+    /// levels drawn large carry one by default, which is the pair GitHub gives
+    /// a bottom border.
+    pub heading_border: [Option<Decoration>; 6],
+    /// A bar down the left of each heading level. GitHub draws no such thing,
+    /// so nothing is on unless a theme asks for it.
+    pub heading_bar: [Option<Decoration>; 6],
 
     pub link: Style,
     pub code: Style,
@@ -188,6 +271,15 @@ impl Default for Theme {
             background: None,
             syntect_theme: "base16-ocean.dark".into(),
             headings: [bold; 6],
+            heading_border: [
+                Some(Decoration { color: None }),
+                Some(Decoration { color: None }),
+                None,
+                None,
+                None,
+                None,
+            ],
+            heading_bar: [None; 6],
             link: Style {
                 underline: true,
                 ..Style::PLAIN
@@ -287,7 +379,18 @@ impl Theme {
             } else {
                 t.headings[i - 1]
             };
-            t.headings[i] = take(&file.heading, key, fallback)?;
+            let spec = file.heading.get(*key);
+            t.headings[i] = match spec {
+                Some(spec) => fallback.patch(spec.style().resolve()?),
+                None => fallback,
+            };
+            // Decoration does not inherit the way style does. Carrying `h2`'s
+            // border down would put one under every level of a theme that
+            // named only the first two, which is the opposite of what asking
+            // for a border on `h2` means.
+            t.heading_border[i] =
+                decoration(spec.and_then(|s| s.border.as_ref()), t.heading_border[i])?;
+            t.heading_bar[i] = decoration(spec.and_then(|s| s.bar.as_ref()), t.heading_bar[i])?;
         }
 
         t.link = take(&file.inline, "link", t.link)?;
@@ -429,10 +532,30 @@ pub fn dump(theme: &Theme) -> String {
 
     out.push_str("\n[heading]\n");
     for level in 1..=6u8 {
-        out.push_str(&format!(
-            "h{level} = {}\n",
-            style_toml(theme.heading(level))
-        ));
+        let i = (level - 1) as usize;
+        let mut parts = vec![style_toml(theme.headings[i])];
+        for (key, decor) in [
+            ("border", theme.heading_border[i]),
+            ("bar", theme.heading_bar[i]),
+        ] {
+            parts.push(match decor {
+                None => format!("{key} = false"),
+                Some(Decoration { color: None }) => format!("{key} = true"),
+                Some(Decoration { color: Some(c) }) => {
+                    format!("{key} = \"{}\"", color_toml(c))
+                }
+            });
+        }
+        // The style is already an inline table; the decorations join it rather
+        // than sitting beside it, since they are keys of the same heading.
+        let style = parts.remove(0);
+        let inner = style.trim_matches(['{', '}', ' ']);
+        let joined = if inner.is_empty() {
+            parts.join(", ")
+        } else {
+            format!("{inner}, {}", parts.join(", "))
+        };
+        out.push_str(&format!("h{level} = {{ {joined} }}\n"));
     }
 
     let sections: [(&str, &[(&str, Style)]); 5] = [
@@ -691,6 +814,78 @@ mod tests {
             let written = color_toml(c);
             assert_eq!(parse_color(&written).unwrap(), c, "{written:?}");
         }
+    }
+
+    #[test]
+    fn a_theme_that_says_nothing_borders_the_levels_drawn_large() {
+        // The point of deriving rather than enumerating: every theme written
+        // before decoration existed still shows it.
+        for (name, text) in BUNDLED {
+            let theme = Theme::parse(text).unwrap();
+            assert_eq!(
+                theme.heading_border[0],
+                Some(Decoration { color: None }),
+                "{name} lost h1's border"
+            );
+            assert_eq!(theme.heading_border[2], None, "{name} bordered h3");
+            assert!(
+                theme.heading_bar.iter().all(|b| b.is_none()),
+                "{name} grew a bar nobody asked for"
+            );
+        }
+    }
+
+    #[test]
+    fn a_decoration_can_be_turned_off_given_a_colour_or_left_to_derive_one() {
+        let theme = Theme::parse(
+            r##"
+            name = "t"
+            [heading]
+            h1 = { fg = "#ff0000", border = false }
+            h2 = { border = "#00ff00" }
+            h3 = { bar = true }
+            "##,
+        )
+        .unwrap();
+        assert_eq!(theme.heading_border[0], None);
+        assert_eq!(
+            theme.heading_border[1],
+            Some(Decoration {
+                color: Some(Color::Rgb { r: 0, g: 255, b: 0 })
+            })
+        );
+        assert_eq!(theme.heading_bar[2], Some(Decoration { color: None }));
+    }
+
+    #[test]
+    fn decoration_does_not_inherit_the_way_style_does() {
+        // h4..h6 inherit h3's colour, and must not inherit its bar: a theme
+        // asking for a bar on one level is not asking for one on every level
+        // below it.
+        let theme = Theme::parse(
+            r##"
+            name = "t"
+            [heading]
+            h3 = { fg = "#00ff00", bar = true }
+            "##,
+        )
+        .unwrap();
+        assert_eq!(theme.heading(4).fg, theme.heading(3).fg);
+        assert_eq!(theme.heading_bar[2], Some(Decoration { color: None }));
+        assert_eq!(theme.heading_bar[3], None, "the bar leaked down to h4");
+    }
+
+    #[test]
+    fn border_and_bar_are_refused_on_a_style_that_is_not_a_heading() {
+        let err = Theme::parse(
+            r##"
+            name = "t"
+            [inline]
+            link = { fg = "#ff0000", border = true }
+            "##,
+        )
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("border"), "{err:#}");
     }
 
     #[test]

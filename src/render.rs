@@ -19,9 +19,11 @@
 //! row is padded out to the full width instead, which erases exactly as well
 //! and leaves the images alone.
 
+use crate::bigtext::HeadingDecor;
 use crate::graphics::ImageStore;
 use crate::ir::{Color, Hit, HitTarget, Line, Link, Rect, Scale, Span, Style};
 use crate::screen::Screen;
+use crate::theme::Theme;
 use crate::width::WidthCalc;
 use crate::wrap::slice_spans_columns;
 use anyhow::Result;
@@ -80,6 +82,9 @@ pub struct Frame<'a> {
     pub links: &'a [Link],
     /// Contents of the bottom row.
     pub bottom: &'a [Span],
+    /// Consulted for heading decoration, which is chosen per heading level and
+    /// so cannot be baked into the line's spans the way a colour is.
+    pub theme: &'a Theme,
     pub decor: Decor<'a>,
     /// Whether DECDHL line attributes may be written at all. Terminals that do
     /// not implement them print `ESC # 3` as a parse error and then draw the
@@ -260,11 +265,13 @@ impl Renderer {
             .and_then(rgb_of)
             .unwrap_or((200, 200, 200));
 
+        let decor = heading_decor(frame.theme, line.heading, color);
+
         for row in 0..2 {
             self.blank_row(out, frame, y + row)?;
         }
         queue!(out, MoveTo(0, y))?;
-        if images.place_text(out, trimmed, color, cols, 2)? {
+        if images.place_text(out, trimmed, color, cols, 2, decor)? {
             return Ok(());
         }
         let mut placement = Placement::default();
@@ -573,6 +580,37 @@ fn rgb_of(color: Color) -> Option<(u8, u8, u8)> {
     }
 }
 
+/// Dim a color towards black, for a decoration that has none of its own.
+///
+/// Blending towards the *background* would read better and cannot be done here:
+/// the `terminal` theme deliberately has no background color, so there is
+/// nothing to blend with. Scaling the channels needs nothing but the color
+/// itself, which is why a derived decoration shows up under every theme rather
+/// than only under the ones that paint their own background.
+fn dimmed(color: (u8, u8, u8)) -> (u8, u8, u8) {
+    let scale = |c: u8| ((c as u16 * 55) / 100) as u8;
+    (scale(color.0), scale(color.1), scale(color.2))
+}
+
+/// What to draw around a heading of this level, in the color it resolves to.
+///
+/// A row that is not a heading gets nothing. A level the theme says nothing
+/// about gets its default, which is a border on the two levels drawn large and
+/// no bar anywhere.
+fn heading_decor(theme: &Theme, level: Option<u8>, color: (u8, u8, u8)) -> HeadingDecor {
+    let Some(level) = level else {
+        return HeadingDecor::default();
+    };
+    let i = (level.clamp(1, 6) - 1) as usize;
+    let resolve = |d: Option<crate::theme::Decoration>| {
+        d.map(|d| d.color.and_then(rgb_of).unwrap_or_else(|| dimmed(color)))
+    };
+    HeadingDecor {
+        border: resolve(theme.heading_border[i]),
+        bar: resolve(theme.heading_bar[i]),
+    }
+}
+
 pub fn detect_truecolor() -> bool {
     match std::env::var("COLORTERM") {
         Ok(v) => {
@@ -665,6 +703,8 @@ mod tests {
         buf
     }
 
+    static TEST_THEME: std::sync::LazyLock<Theme> = std::sync::LazyLock::new(Theme::default);
+
     fn basic_frame<'a>(lines: &'a [Line], bottom: &'a [Span]) -> Frame<'a> {
         Frame {
             screen: Screen::new(20, 4),
@@ -673,6 +713,7 @@ mod tests {
             hoffset: 0,
             links: &[],
             bottom,
+            theme: &TEST_THEME,
             decor: Decor::default(),
             double_height: true,
             raster_headings: false,

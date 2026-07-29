@@ -1275,6 +1275,7 @@ impl App {
             hoffset: self.hoffset,
             links: &doc.links,
             bottom: &bottom,
+            theme: &self.theme,
             // DECDHL and bitmaps are alternatives, never both at once.
             double_height: self.double_height && !self.raster_headings,
             raster_headings: self.double_height && self.raster_headings,
