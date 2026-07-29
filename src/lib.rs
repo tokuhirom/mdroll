@@ -18,6 +18,7 @@ pub mod clipboard;
 pub mod config;
 pub mod graphics;
 pub mod highlight;
+pub mod html;
 pub mod ir;
 pub mod keys;
 pub mod layout;

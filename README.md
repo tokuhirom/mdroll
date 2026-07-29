@@ -44,6 +44,9 @@ gracefully rather than being the design center.
 
 - **Full GitHub Flavored Markdown** — tables, task lists, strikethrough,
   autolinks, footnotes, and `> [!NOTE]` alerts.
+- **The HTML in your README** — centred logos, badge rows, `<details>`
+  sections, `<kbd>` keys, HTML tables and lists, all rendered rather than
+  dumped as tags.
 - **Mermaid diagrams** — `flowchart` and `sequenceDiagram` drawn with box
   characters, laid out by rank. Anything else goes through `mmdc` and renders
   as a picture, if you have it installed.
@@ -344,6 +347,28 @@ expensive to retrofit.
 **`layout()` is a pure function.** Wrap/no-wrap toggling, source/render
 toggling, and terminal resize are all handled by discarding the layout and
 recomputing it. No incremental state, no invalidation logic, no drift.
+
+### HTML
+
+READMEs are full of HTML that Markdown has no syntax for: centred logos, badge
+rows, `<details>` sections, `<sub>` captions. GitHub renders all of it, so
+printing the tags is the wrong answer.
+
+`mdroll` parses the subset that appears in hand-written documents — well-nested
+tags, quoted or bare attributes, void elements, comments, and the entities
+people actually type — and maps it onto the same intermediate representation
+Markdown produces. `align="center"` and `text-align` become block alignment,
+which Markdown itself cannot express. A logo wrapped in a link inside a
+`<picture>` inside a centred paragraph is recognised as what it is, a figure,
+and drawn as one.
+
+Two deliberate departures from a browser. A run of `<br>` tags collapses to a
+single blank line, because six of them is a spacing hack that would cost six
+rows of a terminal. And `<details>` cannot fold, so the summary is shown as a
+heading and the contents follow it.
+
+An HTML block that produces nothing renderable falls back to showing its
+source, which is still better than showing nothing.
 
 ### Text measurement
 

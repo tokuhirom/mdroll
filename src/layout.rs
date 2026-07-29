@@ -206,6 +206,9 @@ impl<'a> Ctx<'a> {
             };
             for piece in pieces {
                 let mut spans = self.lead_spans(block, first);
+                if let Some(pad) = self.alignment_pad(block, &piece, width) {
+                    spans.push(Span::plain(" ".repeat(pad)));
+                }
                 spans.extend(piece);
                 let mut line = Line::new(self.source_line(block, row), idx, spans);
                 line.scale = scale;
@@ -215,6 +218,22 @@ impl<'a> Ctx<'a> {
                 row += 1;
             }
         }
+    }
+
+    /// Leading spaces needed to align a row within the content width.
+    fn alignment_pad(&self, block: &Block, piece: &[Span], width: usize) -> Option<usize> {
+        let align = block.align?;
+        if align == Align::Left {
+            return None;
+        }
+        let used = self.width_of(piece);
+        let slack = width.saturating_sub(used);
+        Some(match align {
+            Align::Center => slack / 2,
+            Align::Right => slack,
+            Align::Left => 0,
+        })
+        .filter(|pad| *pad > 0)
     }
 
     /// Best guess at which original line a rendered row came from. Exact for

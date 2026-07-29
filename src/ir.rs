@@ -146,6 +146,9 @@ pub struct Block {
     /// Whether a blank line separates this block from the one before it.
     /// False inside tight lists.
     pub blank_before: bool,
+    /// Horizontal alignment, from `<p align="center">` and friends. Markdown
+    /// has no syntax for this, but READMEs are full of it.
+    pub align: Option<Align>,
 }
 
 impl Block {
@@ -160,6 +163,7 @@ impl Block {
             table: None,
             image: None,
             blank_before: true,
+            align: None,
         }
     }
 
