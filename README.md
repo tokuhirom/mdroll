@@ -838,7 +838,7 @@ that declining beats drawing something subtly wrong.
 
 Two more, found while fixing those rather than by reading:
 
-- [ ] Edge labels are drawn only by the fan that hangs a parent's children off
+- [x] Edge labels are drawn only by the fan that hangs a parent's children off
       one bus, which is the only place that has them. A `flowchart LR` drops
       every label it is given — `A -->|yes| B` draws no `yes` anywhere — and so
       does any edge that skips a rank in a `TD` chart.
