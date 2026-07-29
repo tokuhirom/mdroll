@@ -123,8 +123,9 @@ on a terminal.
 
 | Option | Description |
 | --- | --- |
-| `--theme <NAME>` | Color theme. Default: `terminal` (uses your terminal's own colors). |
+| `--theme <NAME\|PATH>` | Color theme, by name or by path to a `.toml` file. Default: `terminal` (uses your terminal's own colors). |
 | `--list-themes` | Print available theme names and exit. |
+| `--dump-theme <NAME\|PATH>` | Write a theme out as TOML and exit. A starting point for your own. |
 | `--wrap` / `--no-wrap` | Start in reflow or horizontal-scroll mode. |
 | `--source` | Start in source view instead of rendered view. |
 | `--width <N>` | Cap the reflow width. `0` means full terminal width. |
@@ -244,6 +245,7 @@ the ones that depend on what the terminal can actually do.
 | Inline images | WezTerm, kitty, ghostty | Alt text, dimmed |
 | Big headings, via DECDHL | WezTerm, xterm, foot | see below |
 | Big headings, rasterized | kitty, ghostty | Colour and weight only |
+| Heading borders and bars | kitty, ghostty | Not drawn; they live in the bitmap |
 | Clickable links (OSC 8) | Most modern terminals | Use `F` or `o` instead |
 | Clipboard over SSH (OSC 52) | Most modern terminals | Enable it in your terminal |
 | Truecolor | `COLORTERM=truecolor` | Nearest 256-color match |
@@ -548,7 +550,13 @@ about 1.5 seconds rather than a permanent status line — it costs no rows at al
 
 ### Headings
 
-On terminals supporting DECDHL, `# Heading` is emitted as double-height text:
+`#` and `##` are drawn large; `###` and below get colour and weight only. Two
+levels is where GitHub stops setting a heading apart structurally as well — it
+is the same pair it draws a bottom border under — and a terminal has few rows to
+spend, so a document whose every level is double-height reads as no hierarchy at
+all.
+
+On terminals supporting DECDHL, such a heading is emitted as double-height text:
 
 ```
 \e#3Heading      ← top half
@@ -574,6 +582,40 @@ behind the glyphs, so the terminal's own background keeps showing through.
 
 The font comes from `fc-match sans-serif:bold`, falling back to a short list of
 usual locations. If nothing is found, big headings are simply not offered.
+
+A bitmap can also be decorated, which text cannot. GitHub gives `h1` and `h2` a
+bottom border, and here a rule under the heading costs nothing: the text uses
+0.78 of two rows the layout has already reserved, so the line goes in the space
+below it rather than on a row of its own. A bar down the left goes in the blank
+the margin leaves, and is dropped rather than drawn over the first letter when
+there is no blank to put it in.
+
+```toml
+[heading]
+h1 = { fg = "#bd93f9", bold = true, border = true, bar = true }
+h2 = { fg = "#8be9fd", bold = true, border = "#6272a4" }   # explicit colour
+h3 = { fg = "#50fa7b", bold = true }
+```
+
+Only the levels drawn large can carry either, since the bitmap is the only place
+with room for them: `h3 = { bar = true }` parses and draws nothing. That is a
+defect and is listed below.
+
+`true` takes the heading's own colour at 55%, which is the default for the two
+levels drawn large. Deriving it rather than requiring it written down is the
+point: every theme that predates the feature, including any you already have,
+shows a border without being edited. Dimming scales the channels rather than
+blending towards the background, because `terminal` has no background colour to
+blend with.
+
+Unlike colour, decoration does **not** inherit down the levels. A theme naming
+only `h1`..`h3` gets `h3`'s colour on `h4`..`h6`, and asking for a bar on `h3`
+does not put one on every level beneath it.
+
+This is a place where terminals differ: decoration is drawn into the bitmap, so
+kitty and ghostty show it and the DECDHL terminals do not. Drawing a rule as
+text would cost a whole row, which is the more expensive of the two, and the
+capability table above already documents features that degrade elsewhere.
 
 ### Clipboard
 
@@ -611,6 +653,73 @@ The default theme is `terminal`, which sets no background color and inherits
 your terminal's palette. This avoids fighting WezTerm's transparency and
 background image settings. Named themes paint backgrounds only when explicitly
 selected.
+
+The bundled six, all rendering the same document:
+
+<table>
+<tr>
+<td width="50%"><b>dracula</b><br><img src="doc/themes/dracula.png" alt="mdroll with the dracula theme"></td>
+<td width="50%"><b>terminal</b> (default)<br><img src="doc/themes/terminal.png" alt="mdroll with the terminal theme"></td>
+</tr>
+<tr>
+<td><b>nord</b><br><img src="doc/themes/nord.png" alt="mdroll with the nord theme"></td>
+<td><b>gruvbox</b><br><img src="doc/themes/gruvbox.png" alt="mdroll with the gruvbox theme"></td>
+</tr>
+<tr>
+<td><b>solarized-dark</b><br><img src="doc/themes/solarized-dark.png" alt="mdroll with the solarized-dark theme"></td>
+<td><b>solarized-light</b><br><img src="doc/themes/solarized-light.png" alt="mdroll with the solarized-light theme"></td>
+</tr>
+</table>
+
+Captured in kitty, so the headings are bitmaps: `dracula` is the one theme that
+uses both decorations, and the rest carry the default border on `h1` and `h2`.
+
+#### Writing one
+
+Start from an existing theme rather than a blank file:
+
+```console
+$ mdroll --dump-theme dracula > mine.toml
+$ mdroll --theme ./mine.toml README.md
+$ mv mine.toml ~/.config/mdroll/themes/     # once you like it
+```
+
+`--dump-theme` writes the *resolved* theme: every key the parser reads,
+including the ones this theme left at their default. That is the reference — a
+key list written out by hand here would be wrong the first time a key was added
+and nobody noticed, and a round-trip test asserts that dumping a theme and
+reading it back gives the same theme, so the output cannot drift from the code.
+
+`--theme` takes a path as well as a name, so the file can be rendered where it
+is being edited instead of being installed after every change. A name and a path
+never collide: a name is a file stem under `~/.config/mdroll/themes`, so it
+carries neither a separator nor a `.toml` extension. A user theme whose stem
+matches a bundled one replaces it, and `--list-themes` shows both.
+
+Every key is optional and absent ones fall back, so a theme can be four lines
+long. Two fallbacks are worth knowing:
+
+- `h4`, `h5` and `h6` inherit from the deepest heading level that *was* given,
+  so setting `h1`..`h3` styles all six sensibly rather than leaving three of
+  them unstyled.
+- `foreground` and `background` left unset mean *inherit*, which is what
+  `terminal` does deliberately. Setting them is what makes a theme paint over
+  your terminal's own palette.
+
+Colors are `#rrggbb`, `#rgb`, a 0-255 palette index, or a name: `red`,
+`brightred`, and so on through the sixteen, plus `reset` for the terminal's
+default. Note that `white` is the dim one — the bright one is `brightwhite`.
+
+Attributes are `bold`, `italic`, `underline`, `strikethrough`, `dim` and
+`reverse`. They only ever go *on*: a style is merged over the default rather
+than replacing it, so writing `bold = false` against a key that defaults to bold
+does nothing. Nothing in a theme can turn an attribute off, which is why a dump
+writes only the ones that are set.
+
+A misspelled *section* (`[inlnie]`) and a misspelled *attribute*
+(`{ blod = true }`) are both errors. A misspelled key *within* a section
+(`lnik = { … }`) is not: the sections are maps, so an unrecognised entry is
+carried and never looked at. That one is a defect and is listed as such below.
 
 Truecolor is assumed; 256-color terminals get a nearest-color downgrade.
 
@@ -864,6 +973,55 @@ And one left over from that last one:
       `B` both to `C` and `D` — every column and every row is shared by two
       edges and there is nowhere left to put the fourth label. Two of the four
       are drawn over.
+
+### v1.6 — Themes
+
+A theme can already say what colour a heading is, and a user can already write
+one. What is missing is everything around that: there is no way to point at a
+theme file that is not yet installed, no way to find out which keys exist
+without the repository checked out, and no way for a theme to say anything about
+a heading beyond its colour.
+
+- [x] `--theme` takes a name and nothing else, so `theme::load_path` cannot be
+      reached from the command line and a theme being written has to be copied
+      into the config directory before it can be looked at.
+- [x] No way to see a theme's keys from an installed binary. `themes/*.toml` are
+      in the repository, not in the build. `--dump-theme <name>` writing the
+      resolved theme back out as TOML answers it, and is a starting point for a
+      new theme as well as a reference that cannot drift from the code.
+- [x] The Themes section names a handful of keys by example and leaves the rest
+      to be guessed at. It should say how a theme is written, where it goes, and
+      what is derived when a key is absent.
+- [ ] A misspelled key inside a theme section is carried and never looked at.
+      `[inline]` and `{ blod = true }` are both `deny_unknown_fields` and say
+      so, but the keys between them are map entries, so `lnik = { … }` is
+      accepted in silence and the link stays unstyled. Being told beats
+      wondering why the colour did not take.
+- [x] A heading can be coloured but not decorated. GitHub draws `h1` and `h2`
+      with a bottom border, which is the same pair this renderer draws at double
+      height; a left bar is the other decoration worth having. Drawn into the
+      bitmap they cost no rows, because the text occupies 0.78 of the two the
+      layout already reserved.
+- [x] Decoration colours have to be derived rather than enumerated. A theme
+      written before the feature existed — including every theme a user already
+      has — would otherwise show none of it, which is the same reason `h4`..`h6`
+      inherit from the deepest level given.
+
+And two found while reading the above:
+
+- [x] The Headings section says `# Heading` is emitted double-height, but
+      `heading_scale` does it for every heading up to level 2. `##` is drawn
+      large and the document does not say so.
+- [ ] `border` and `bar` are accepted on every heading level and can only be
+      drawn on the two that get a bitmap, because that is the only path with
+      anywhere to put them. `h3 = { bar = true }` parses, resolves, and draws
+      nothing. Either the levels below the cutoff grow a text decoration that
+      costs a row, or the key is refused where it cannot be honoured.
+- [ ] Rasterizing flattens a heading to one string and one colour, taken from
+      the first span that has one, so inline styling inside a heading is lost on
+      exactly the terminals that get the bitmap. `` # See `config.toml` ``
+      renders the code span in its own colour under DECDHL and in the heading's
+      colour under kitty.
 
 ---
 

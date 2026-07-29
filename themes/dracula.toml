@@ -7,8 +7,8 @@ syntect_theme = "Dracula"
 fence = { fg = "#6272a4" }
 
 [heading]
-h1 = { fg = "#bd93f9", bold = true }
-h2 = { fg = "#8be9fd", bold = true }
+h1 = { fg = "#bd93f9", bold = true, border = true, bar = true }
+h2 = { fg = "#8be9fd", bold = true, border = true }
 h3 = { fg = "#50fa7b", bold = true }
 h4 = { fg = "#f1fa8c", bold = true }
 h5 = { fg = "#ffb86c", bold = true }

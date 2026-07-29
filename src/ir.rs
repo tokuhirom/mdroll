@@ -329,6 +329,13 @@ pub struct Line {
     /// Index into [`Document::blocks`], for the block cursor.
     pub block: usize,
     pub scale: Scale,
+    /// Heading level, 1-6, for a row that is part of one.
+    ///
+    /// The scale does not say it: a heading is drawn at normal size below level
+    /// 2, and with `-z` at every level. Decoration is chosen per level, and by
+    /// the time a line reaches the renderer the block it came from is behind
+    /// it, so the level travels with the row.
+    pub heading: Option<u8>,
     pub spans: Vec<Span>,
     pub hits: Vec<Hit>,
 }
@@ -339,6 +346,7 @@ impl Line {
             source_line,
             block,
             scale: Scale::Normal,
+            heading: None,
             spans,
             hits: Vec::new(),
         }

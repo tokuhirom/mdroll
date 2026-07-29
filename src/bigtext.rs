@@ -79,6 +79,93 @@ pub struct Renderer {
     fonts: Vec<FontVec>,
 }
 
+/// What to draw around a heading, in colors the caller has already resolved.
+///
+/// Decoration is only possible on this path. A DECDHL heading is text the
+/// terminal scales for itself and there is nowhere to put a rule that does not
+/// cost a row; a bitmap already owns two rows and uses 0.78 of them, so a line
+/// under the text and a bar beside it are free.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct HeadingDecor {
+    /// A rule under the text, the way GitHub borders `h1` and `h2`.
+    pub border: Option<(u8, u8, u8)>,
+    /// A bar down the left, in the blank the margin and indent leave.
+    pub bar: Option<(u8, u8, u8)>,
+}
+
+impl HeadingDecor {
+    pub fn is_none(&self) -> bool {
+        self.border.is_none() && self.bar.is_none()
+    }
+}
+
+/// Paint a solid rectangle, clipped to the canvas.
+///
+/// Decoration is drawn over whatever is already there rather than blended with
+/// it: the glyphs and the rules do not overlap by construction, and a rule that
+/// faded where it crossed a descender would look like a rendering fault.
+fn fill(
+    canvas: &mut [u8],
+    width: u32,
+    height: u32,
+    x: std::ops::Range<u32>,
+    y: std::ops::Range<u32>,
+    color: (u8, u8, u8),
+) {
+    for py in y.start..y.end.min(height) {
+        for px in x.start..x.end.min(width) {
+            let i = ((py * width + px) * 4) as usize;
+            canvas[i] = color.0;
+            canvas[i + 1] = color.1;
+            canvas[i + 2] = color.2;
+            canvas[i + 3] = 255;
+        }
+    }
+}
+
+/// Draw the border and the bar around text occupying `start..end` horizontally.
+///
+/// Both are sized from the cell rather than from a constant, so they keep their
+/// proportions on a terminal with a larger font: a two-pixel rule is a hairline
+/// at one cell size and a stripe at another.
+fn draw_decor(
+    canvas: &mut [u8],
+    width: u32,
+    height: u32,
+    cell: CellSize,
+    start: u32,
+    end: u32,
+    decor: HeadingDecor,
+) {
+    let cell_h = cell.h.max(1) as u32;
+    let cell_w = cell.w.max(1) as u32;
+
+    if let Some(color) = decor.border {
+        // The text is 0.78 of the canvas and vertically centred, so the bottom
+        // tenth is clear of descenders and needs no measuring to avoid them.
+        let thickness = (cell_h / 8).max(1);
+        let gap = (cell_h / 8).max(1);
+        let bottom = height.saturating_sub(gap);
+        let top = bottom.saturating_sub(thickness);
+        if end > start {
+            fill(canvas, width, height, start..end, top..bottom, color);
+        }
+    }
+
+    if let Some(color) = decor.bar {
+        let bar_w = (cell_w / 3).max(2);
+        let gap = (cell_w / 2).max(2);
+        // The bar goes in the blank in front of the text. Where there is no
+        // room for it — no margin, no indent — it is dropped rather than drawn
+        // over the first letter.
+        if let Some(right) = start.checked_sub(gap)
+            && let Some(left) = right.checked_sub(bar_w)
+        {
+            fill(canvas, width, height, left..right, 0..height, color);
+        }
+    }
+}
+
 fn load_font(path: &std::path::Path) -> Result<FontVec> {
     let bytes = std::fs::read(path)?;
     // A .ttc is a collection; index 0 is the right face for every fontconfig
@@ -132,6 +219,7 @@ impl Renderer {
         cols: u16,
         rows: u16,
         cell: CellSize,
+        decor: HeadingDecor,
     ) -> Option<Vec<u8>> {
         let width = cols as u32 * cell.w as u32;
         let height = rows as u32 * cell.h as u32;
@@ -150,8 +238,16 @@ impl Renderer {
         // fallback glyph does not sit at a different height from its neighbours.
         let baseline = ascent + (height as f32 - primary.height()) / 2.0;
         let mut previous: Option<ab_glyph::GlyphId> = None;
+        // Where the text itself starts and ends, ignoring the blank the margin
+        // and any indent put in front of it. Decoration lines up with the
+        // glyphs, not with the left edge of the screen.
+        let mut text_start: Option<f32> = None;
+        let mut text_end = 0.0f32;
 
         for c in text.chars() {
+            if !c.is_whitespace() {
+                text_start.get_or_insert(pen);
+            }
             let (font, id) = self.pick(c);
             let scaled = font.as_scaled(PxScale::from(px));
             if let Some(prev) = previous {
@@ -181,9 +277,18 @@ impl Renderer {
                 });
             }
             pen += scaled.h_advance(id);
+            if !c.is_whitespace() {
+                text_end = pen;
+            }
             if pen > width as f32 {
                 break;
             }
+        }
+
+        if !decor.is_none() {
+            let start = text_start.unwrap_or(0.0).max(0.0) as u32;
+            let end = (text_end.min(width as f32) as u32).max(start);
+            draw_decor(&mut canvas, width, height, cell, start, end, decor);
         }
 
         let image = image::RgbaImage::from_raw(width, height, canvas)?;
@@ -221,7 +326,7 @@ mod tests {
             return;
         };
         let png = renderer
-            .render("Heading", (255, 0, 0), 20, 2, CELL)
+            .render("Heading", (255, 0, 0), 20, 2, CELL, HeadingDecor::default())
             .unwrap();
         assert_eq!(&png[..4], b"\x89PNG");
         let decoded = image::load_from_memory(&png).unwrap();
@@ -234,7 +339,9 @@ mod tests {
         let Some(renderer) = renderer() else {
             return;
         };
-        let png = renderer.render("I", (255, 255, 255), 10, 2, CELL).unwrap();
+        let png = renderer
+            .render("I", (255, 255, 255), 10, 2, CELL, HeadingDecor::default())
+            .unwrap();
         let image = image::load_from_memory(&png).unwrap().to_rgba8();
         // The bottom-right corner is well clear of a single narrow glyph.
         let corner = image.get_pixel(image.width() - 1, image.height() - 1);
@@ -246,7 +353,9 @@ mod tests {
         let Some(renderer) = renderer() else {
             return;
         };
-        let png = renderer.render("HHHH", (10, 200, 30), 12, 2, CELL).unwrap();
+        let png = renderer
+            .render("HHHH", (10, 200, 30), 12, 2, CELL, HeadingDecor::default())
+            .unwrap();
         let image = image::load_from_memory(&png).unwrap().to_rgba8();
         let painted = image
             .pixels()
@@ -263,7 +372,14 @@ mod tests {
         // A Latin bold face has no kanji; if the chain is not consulted the
         // bitmap comes out blank.
         let png = renderer
-            .render("日本語の見出し", (255, 255, 255), 30, 2, CELL)
+            .render(
+                "日本語の見出し",
+                (255, 255, 255),
+                30,
+                2,
+                CELL,
+                HeadingDecor::default(),
+            )
             .unwrap();
         let image = image::load_from_memory(&png).unwrap().to_rgba8();
         let painted = image.pixels().filter(|p| p.0[3] > 128).count();
@@ -279,10 +395,24 @@ mod tests {
             return;
         };
         let latin = renderer
-            .render("Heading", (255, 255, 255), 30, 2, CELL)
+            .render(
+                "Heading",
+                (255, 255, 255),
+                30,
+                2,
+                CELL,
+                HeadingDecor::default(),
+            )
             .unwrap();
         let mixed = renderer
-            .render("Heading 見出し", (255, 255, 255), 30, 2, CELL)
+            .render(
+                "Heading 見出し",
+                (255, 255, 255),
+                30,
+                2,
+                CELL,
+                HeadingDecor::default(),
+            )
             .unwrap();
         let count = |png: &[u8]| {
             image::load_from_memory(png)
@@ -295,13 +425,180 @@ mod tests {
         assert!(count(&mixed) > count(&latin), "the kanji added nothing");
     }
 
+    fn decoded(png: &[u8]) -> image::RgbaImage {
+        image::load_from_memory(png).unwrap().to_rgba8()
+    }
+
+    /// Pixels of exactly this colour, as (x, y).
+    fn pixels_of(image: &image::RgbaImage, color: [u8; 4]) -> Vec<(u32, u32)> {
+        image
+            .enumerate_pixels()
+            .filter(|(_, _, p)| p.0 == color)
+            .map(|(x, y, _)| (x, y))
+            .collect()
+    }
+
+    /// Leftmost pixel the glyphs themselves reach.
+    ///
+    /// Measured rather than worked out: a bitmap heading is laid out with the
+    /// font's own advances, not on the terminal's cell grid, so where the text
+    /// starts is not `margin * cell.w` and cannot be predicted from the string.
+    fn text_left(renderer: &Renderer, text: &str) -> u32 {
+        let png = renderer
+            .render(text, (255, 255, 255), 40, 2, CELL, HeadingDecor::default())
+            .unwrap();
+        decoded(&png)
+            .enumerate_pixels()
+            .filter(|(_, _, p)| p.0[3] > 128)
+            .map(|(x, _, _)| x)
+            .min()
+            .expect("something was drawn")
+    }
+
+    fn border_pixels(renderer: &Renderer, text: &str) -> Vec<(u32, u32)> {
+        let png = renderer
+            .render(
+                text,
+                (255, 255, 255),
+                40,
+                2,
+                CELL,
+                HeadingDecor {
+                    border: Some((255, 0, 0)),
+                    bar: None,
+                },
+            )
+            .unwrap();
+        pixels_of(&decoded(&png), [255, 0, 0, 255])
+    }
+
+    #[test]
+    fn a_border_sits_below_the_text_and_starts_where_the_text_does() {
+        let Some(renderer) = renderer() else {
+            return;
+        };
+        // A rule that ran the full width of the row would start out in the
+        // margin and read as a scrollbar rather than as part of the heading.
+        // Indenting the text must carry the border right with it.
+        let flush = border_pixels(&renderer, "Heading");
+        let indented = border_pixels(&renderer, "        Heading");
+        assert!(!flush.is_empty() && !indented.is_empty(), "no border drawn");
+
+        let left = |v: &[(u32, u32)]| v.iter().map(|(x, _)| *x).min().unwrap();
+        assert!(
+            left(&indented) > left(&flush),
+            "border did not follow the indent: {} vs {}",
+            left(&indented),
+            left(&flush)
+        );
+        assert!(
+            left(&indented) <= text_left(&renderer, "        Heading"),
+            "border starts right of the first letter"
+        );
+
+        let image_height = 2 * CELL.h as u32;
+        let top = indented.iter().map(|(_, y)| *y).min().unwrap();
+        assert!(
+            top > image_height / 2,
+            "border at row {top} is not below the text"
+        );
+    }
+
+    #[test]
+    fn a_bar_stops_short_of_the_first_letter() {
+        let Some(renderer) = renderer() else {
+            return;
+        };
+        let text = "        Heading";
+        let png = renderer
+            .render(
+                text,
+                (255, 255, 255),
+                40,
+                2,
+                CELL,
+                HeadingDecor {
+                    border: None,
+                    bar: Some((0, 255, 0)),
+                },
+            )
+            .unwrap();
+        let green = pixels_of(&decoded(&png), [0, 255, 0, 255]);
+        assert!(!green.is_empty(), "no bar drawn");
+        let right = green.iter().map(|(x, _)| *x).max().unwrap();
+        assert!(
+            right < text_left(&renderer, text),
+            "bar reached {right}px and the text starts at {}px",
+            text_left(&renderer, text)
+        );
+    }
+
+    #[test]
+    fn a_heading_with_nothing_in_front_of_it_gets_no_bar_rather_than_a_smudged_letter() {
+        let Some(renderer) = renderer() else {
+            return;
+        };
+        // margin = 0 leaves nowhere to put the bar. Dropping it is the only
+        // option that does not draw over the first glyph.
+        let png = renderer
+            .render(
+                "Heading",
+                (255, 255, 255),
+                40,
+                2,
+                CELL,
+                HeadingDecor {
+                    border: None,
+                    bar: Some((0, 255, 0)),
+                },
+            )
+            .unwrap();
+        let image = decoded(&png);
+        assert!(
+            !image.pixels().any(|p| p.0 == [0, 255, 0, 255]),
+            "a bar was drawn where there was no room for one"
+        );
+    }
+
+    #[test]
+    fn decoration_leaves_the_background_transparent() {
+        let Some(renderer) = renderer() else {
+            return;
+        };
+        let png = renderer
+            .render(
+                "  Hi",
+                (255, 255, 255),
+                40,
+                2,
+                CELL,
+                HeadingDecor {
+                    border: Some((255, 0, 0)),
+                    bar: Some((0, 255, 0)),
+                },
+            )
+            .unwrap();
+        let image = decoded(&png);
+        // Well right of four characters at double width, and above the border.
+        let corner = image.get_pixel(image.width() - 1, 0);
+        assert_eq!(corner.0[3], 0, "decoration filled the whole canvas");
+    }
+
     #[test]
     fn empty_text_renders_nothing() {
         let Some(renderer) = renderer() else {
             return;
         };
-        assert!(renderer.render("   ", (0, 0, 0), 10, 2, CELL).is_none());
-        assert!(renderer.render("x", (0, 0, 0), 0, 2, CELL).is_none());
+        assert!(
+            renderer
+                .render("   ", (0, 0, 0), 10, 2, CELL, HeadingDecor::default())
+                .is_none()
+        );
+        assert!(
+            renderer
+                .render("x", (0, 0, 0), 0, 2, CELL, HeadingDecor::default())
+                .is_none()
+        );
     }
 
     #[test]
@@ -310,7 +607,14 @@ mod tests {
             return;
         };
         let png = renderer
-            .render(&"wide ".repeat(50), (255, 255, 255), 10, 2, CELL)
+            .render(
+                &"wide ".repeat(50),
+                (255, 255, 255),
+                10,
+                2,
+                CELL,
+                HeadingDecor::default(),
+            )
             .unwrap();
         let decoded = image::load_from_memory(&png).unwrap();
         assert_eq!(decoded.width(), 10 * CELL.w as u32);

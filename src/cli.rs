@@ -15,13 +15,18 @@ pub struct Cli {
     /// Markdown file to view. Reads stdin when piped, browses *.md otherwise.
     pub file: Option<PathBuf>,
 
-    /// Color theme. Default: `terminal`, which uses your terminal's own colors.
-    #[arg(long, value_name = "NAME")]
+    /// Color theme, by name or by path to a .toml file. Default: `terminal`,
+    /// which uses your terminal's own colors.
+    #[arg(long, value_name = "NAME|PATH")]
     pub theme: Option<String>,
 
     /// Print available theme names and exit.
     #[arg(long)]
     pub list_themes: bool,
+
+    /// Write a theme out as TOML and exit. A starting point for your own.
+    #[arg(long, value_name = "NAME|PATH")]
+    pub dump_theme: Option<String>,
 
     /// Write a roff man page to stdout and exit.
     #[arg(long, hide = true)]
