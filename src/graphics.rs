@@ -399,14 +399,22 @@ impl ImageStore {
             .collect();
         for id in gone {
             write!(out, "\x1b_Ga=d,d=i,i={id},p={id}\x1b\\")?;
+            // Only when the cache still points at *this* id. A resize sends
+            // the image up again under a new one, and retiring the old
+            // placement must not throw the new upload away — that leaves the
+            // cache empty with the image still on screen, so the next frame
+            // uploads it again, and so does the one after that, for as long as
+            // it stays visible.
             match self.origin.remove(&id) {
-                Some(Origin::Image(image)) => {
+                Some(Origin::Image(image))
+                    if self.uploaded.get(&image).is_some_and(|e| e.kitty_id == id) =>
+                {
                     self.uploaded.remove(&image);
                 }
-                Some(Origin::Text(key)) => {
+                Some(Origin::Text(key)) if self.text.get(&key) == Some(&id) => {
                     self.text.remove(&key);
                 }
-                None => {}
+                _ => {}
             }
         }
         Ok(())
@@ -718,6 +726,48 @@ mod tests {
         // The terminal may free data with no placements, so the upload has to
         // be forgotten or the next appearance would place a ghost.
         assert!(!store.uploaded.contains_key(&0));
+    }
+
+    #[test]
+    fn a_re_upload_survives_the_old_placement_being_retired() {
+        let mut store = ImageStore::new(Protocol::Kitty, CELL);
+        store.uploaded.insert(
+            0,
+            Entry {
+                kitty_id: 9,
+                cols: 4,
+                rows: 2,
+            },
+        );
+        store.origin.insert(9, Origin::Image(0));
+
+        let mut out = Vec::new();
+        store.begin_frame();
+        store.place(&mut out, 0, 4, 2, 0, 2).unwrap();
+        store.end_frame(&mut out).unwrap();
+
+        // The window was resized, so the image goes up again at its new size
+        // under a new id and the old placement is retired.
+        store.begin_frame();
+        store.uploaded.insert(
+            0,
+            Entry {
+                kitty_id: 10,
+                cols: 8,
+                rows: 4,
+            },
+        );
+        store.origin.insert(10, Origin::Image(0));
+        let mut out = Vec::new();
+        store.place(&mut out, 0, 8, 4, 0, 4).unwrap();
+        store.end_frame(&mut out).unwrap();
+
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("a=d,d=i,i=9"), "the old one goes: {text:?}");
+        // Dropping the fresh entry here leaves the image on screen with an
+        // empty cache, so every later frame re-reads, rescales, re-encodes and
+        // re-transmits the file — for as long as it stays visible.
+        assert_eq!(store.uploaded.get(&0).map(|e| e.kitty_id), Some(10));
     }
 
     #[test]

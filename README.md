@@ -831,7 +831,7 @@ that declining beats drawing something subtly wrong.
       declined.
 - [x] A sequence message whose text contains `-->`, as in `A->B: use --> this`,
       is split at the arrow inside the text and the whole diagram is declined.
-- [ ] Retiring a placement clears the upload cache by image id without checking
+- [x] Retiring a placement clears the upload cache by image id without checking
       that the id being deleted is the one cached. Resize the window once and
       every later frame re-reads the file, rescales it, re-encodes a PNG, and
       re-transmits it — for as long as the image stays on screen.
