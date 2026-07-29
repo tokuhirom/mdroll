@@ -967,12 +967,21 @@ Four more, found while fixing those rather than by reading:
 
 And one left over from that last one:
 
-- [ ] A label hangs off whichever end of its edge that edge has to itself, which
+- [x] A label hangs off whichever end of its edge that edge has to itself, which
       is the parent where several meet at a child and the child where one parent
       has several. Where two parents each have two labelled children — `A` and
       `B` both to `C` and `D` — every column and every row is shared by two
       edges and there is nowhere left to put the fourth label. Two of the four
       are drawn over.
+
+And one found while fixing it:
+
+- [ ] `flowchart LR` has its own version of that collision, and a worse one.
+      The same four edges lose two labels outright and show the surviving two
+      against the wrong edges, because a sideways label is written at one end of
+      its own connector and several connectors arriving at one box share that
+      row. The fix above does not reach it: that one stacks rows above the bus a
+      fan hangs its children from, and `LR` has no bus to stack above.
 
 ### v1.6 — Themes
 

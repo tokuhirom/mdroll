@@ -583,22 +583,17 @@ fn draw_top_down(
         h: 0,
     }));
 
-    let mut y = 0usize;
-    let mut rank_y = Vec::new();
+    // Columns first. Where a box sits across the canvas does not depend on how
+    // tall the bands between the ranks turn out to be, and the bands cannot be
+    // measured until the labels have columns to be placed against.
     for (r, nodes) in by_rank.iter().enumerate() {
-        rank_y.push(y);
         let mut x = (content_width - rank_widths[r]) / 2;
         for &i in nodes {
             let w = box_w(i);
-            boxes[i] = Box { x, y, w, h: 3 };
+            boxes[i] = Box { x, y: 0, w, h: 3 };
             x += w + GAP;
         }
-        y += 3;
-        if r + 1 < by_rank.len() {
-            y += BAND;
-        }
     }
-    let height = y;
 
     // How many edges of this band each node is an end of. A label hangs off
     // whichever of its edge's two columns is that edge's alone, and these are
@@ -633,6 +628,36 @@ fn draw_top_down(
         b.x += margin;
     }
 
+    // Every label of a band is written above the same bus, so two that overlap
+    // land on each other. Where two parents each have two labelled children,
+    // both ends of every edge are shared and there is no column left that would
+    // tell the labels apart, so the row is what has to give: a label that will
+    // not fit beside the ones already placed goes on the row above.
+    let level = label_levels(chart, &boxes, rank, &parents, &children, calc);
+
+    let mut y = 0usize;
+    for (r, nodes) in by_rank.iter().enumerate() {
+        for &i in nodes {
+            boxes[i].y = y;
+        }
+        y += 3;
+        if r + 1 < by_rank.len() {
+            // The bus sits in the middle of the band and the labels stack up
+            // from just above it, so a band holding n rows of labels has to be
+            // deep enough that the topmost of them still clears the boxes.
+            let stacked = chart
+                .edges
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| rank[e.from] == r && rank[e.to] == r + 1)
+                .map(|(i, _)| level[i])
+                .max()
+                .unwrap_or(0);
+            y += BAND.max(2 * stacked + 2);
+        }
+    }
+    let height = y;
+
     // A lane is a vertical run, which no label can be written along, so the
     // label hangs beside it and the next lane starts past the far end of it.
     let mut lane_off = Vec::with_capacity(long_edges.len());
@@ -655,18 +680,21 @@ fn draw_top_down(
     // Children of the same parent share one horizontal bus, so the glyph where
     // the bus meets the parent has to know about all of them at once.
     for parent in 0..chart.nodes.len() {
-        let fan: Vec<&Edge> = chart
-            .edges
-            .iter()
-            .filter(|e| e.from == parent && rank[e.to] == rank[parent] + 1)
+        let fan: Vec<usize> = (0..chart.edges.len())
+            .filter(|i| {
+                let e = &chart.edges[*i];
+                e.from == parent && rank[e.to] == rank[parent] + 1
+            })
             .collect();
         if !fan.is_empty() {
             fan_out(
                 &mut grid,
                 &boxes[parent],
                 &fan,
+                &chart.edges,
                 &boxes,
                 &parents,
+                &level,
                 chart.reversed,
                 calc,
             );
@@ -861,6 +889,60 @@ fn draw_box(grid: &mut Grid, b: &Box, label: &str, shape: &Shape, calc: &WidthCa
     grid.text(b.x + 2, b.y + 1, label, calc);
 }
 
+/// How many rows above the bus each edge's label sits.
+///
+/// Zero is the row immediately above it, which is where a label goes when
+/// nothing is in the way — and where every label used to go unconditionally.
+///
+/// The rule that gives a label its column puts it beside whichever of the
+/// edge's two ends is that edge's alone. Where two parents each have two
+/// labelled children, neither end is: both parents' columns carry two edges and
+/// so do both children's. The labels are then placed by the only thing left,
+/// which is the order they are written in, so this is the standard sweep over
+/// intervals sorted by where they start, taking the lowest row each will fit on.
+///
+/// One blank column is kept between neighbours. Two labels that merely touch
+/// read as one word.
+fn label_levels(
+    chart: &Flowchart,
+    boxes: &[Box],
+    rank: &[usize],
+    parents: &[usize],
+    children: &[usize],
+    calc: &WidthCalc,
+) -> Vec<usize> {
+    let mut level = vec![0usize; chart.edges.len()];
+    let mut placed: Vec<(usize, usize, isize, isize)> = Vec::new();
+    let mut spans: Vec<(usize, isize, isize)> = Vec::new();
+
+    for (i, edge) in chart.edges.iter().enumerate() {
+        let Some(label) = &edge.label else { continue };
+        if rank[edge.to] != rank[edge.from] + 1 {
+            continue;
+        }
+        let w = calc.str(label) as isize;
+        let (fx, tx) = (boxes[edge.from].center_x(), boxes[edge.to].center_x());
+        let shared = parents[edge.to] > 1 && children[edge.from] == 1;
+        let start = label_start(fx, tx, calc.str(label), shared);
+        spans.push((i, start, start + w + 1));
+    }
+    spans.sort_by_key(|(_, start, _)| *start);
+
+    for (i, start, end) in spans {
+        let band = rank[chart.edges[i].from];
+        let lv = (0..)
+            .find(|lv| {
+                !placed
+                    .iter()
+                    .any(|(b, l, s, e)| *b == band && l == lv && start < *e && *s < end)
+            })
+            .unwrap_or(0);
+        level[i] = lv;
+        placed.push((band, lv, start, end));
+    }
+    level
+}
+
 /// Where an edge's label starts on the row above the bus.
 ///
 /// It has to hang off a column that is this edge's alone, or two labels land on
@@ -887,15 +969,19 @@ fn label_start(fx: usize, tx: usize, w: usize, shared_child: bool) -> isize {
 ///
 /// In a `BT` chart every one of these edges was written pointing the other way,
 /// so the arrowheads belong at the top, on the parent, where all of them meet.
+#[allow(clippy::too_many_arguments)]
 fn fan_out(
     grid: &mut Grid,
     from: &Box,
-    edges: &[&Edge],
+    fan: &[usize],
+    all_edges: &[Edge],
     boxes: &[Box],
     parents: &[usize],
+    level: &[usize],
     reversed: bool,
     calc: &WidthCalc,
 ) {
+    let edges: Vec<&Edge> = fan.iter().map(|i| &all_edges[*i]).collect();
     let fx = from.center_x();
     let top = from.bottom() + 1;
     let bottom = boxes[edges[0].to].y;
@@ -937,7 +1023,7 @@ fn fan_out(
     if reversed {
         grid.put(fx, top, '▲', calc);
     }
-    for edge in edges {
+    for (&i, edge) in fan.iter().zip(&edges) {
         let tx = boxes[edge.to].center_x();
         if !reversed {
             grid.put(tx, bottom.saturating_sub(1), '▼', calc);
@@ -947,9 +1033,15 @@ fn fan_out(
             // far side from its other end. The parent's connector runs down
             // this same row, and a label written straight across it erased the
             // line it belongs to.
+            //
+            // The row comes from the placement pass, which is the only thing
+            // that can see every label of the band at once; this fan knows
+            // about its own parent's edges and not about the ones a second
+            // parent hangs in the same space.
             let shared = parents[edge.to] > 1 && edges.len() == 1;
             let start = label_start(fx, tx, calc.str(label), shared);
-            grid.text(start.max(0) as usize, mid.saturating_sub(1), label, calc);
+            let row = mid.saturating_sub(1 + level[i]);
+            grid.text(start.max(0) as usize, row, label, calc);
         }
     }
 }
@@ -1690,6 +1782,65 @@ mod tests {
                 assert!(joined.contains("│ start │"), "{dir}:\n{joined}");
             }
         }
+    }
+
+    #[test]
+    fn four_labels_between_two_parents_and_two_children_all_survive() {
+        // Both parents' columns carry two edges and so do both children's, so
+        // no column tells the four labels apart and they were all written on
+        // one row. Two of them were drawn over the other two: `from b` came
+        // out as `fto d2`, which is not a word anybody wrote.
+        for n in 1..14 {
+            let labels: Vec<String> = ["fa", "td", "fb", "t2"]
+                .iter()
+                .map(|s| format!("{s}{}", "q".repeat(n)))
+                .collect();
+            let code = format!(
+                "flowchart TD\n A -->|{}| C\n A -->|{}| D\n B -->|{}| C\n B -->|{}| D\n",
+                labels[0], labels[1], labels[2], labels[3]
+            );
+            let out = rows(&code);
+            let joined = out.join("\n");
+            for label in &labels {
+                assert!(
+                    joined.contains(label.as_str()),
+                    "lost {label} at width {n}:\n{joined}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_band_with_nothing_to_stack_is_no_taller_than_it_was() {
+        // Stacking is what a collision costs, and a diagram without one must
+        // not pay it: two children of one parent go left and right of it and
+        // have a row to share.
+        let plain = rows("flowchart TD\n A --> B\n A --> C\n").len();
+        let labelled = rows("flowchart TD\n A -->|yes| B\n A -->|no| C\n").len();
+        assert_eq!(plain, labelled, "a label made the diagram taller");
+    }
+
+    #[test]
+    fn stacked_labels_stay_clear_of_the_boxes_above_them() {
+        // The bus sits in the middle of the band and labels stack upwards from
+        // it, so a band that does not grow with them writes the topmost one
+        // over the row of boxes above.
+        let long = "x".repeat(12);
+        let code = format!(
+            "flowchart TD\n A -->|{long}1| C\n A -->|{long}2| D\n B -->|{long}3| C\n B -->|{long}4| D\n"
+        );
+        let out = rows(&code);
+        let joined = out.join("\n");
+        for (i, row) in out.iter().enumerate() {
+            if row.contains(&long) {
+                assert!(
+                    !row.contains('│') || !row.contains('┌'),
+                    "row {i} has a label written into the boxes:\n{joined}"
+                );
+            }
+        }
+        // The two rows of boxes are still whole.
+        assert_eq!(joined.matches('┌').count(), 4, "{joined}");
     }
 
     #[test]
