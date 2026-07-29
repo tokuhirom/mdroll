@@ -24,6 +24,10 @@ pub struct Cli {
     #[arg(long)]
     pub list_themes: bool,
 
+    /// Write a theme out as TOML and exit. A starting point for your own.
+    #[arg(long, value_name = "NAME|PATH")]
+    pub dump_theme: Option<String>,
+
     /// Write a roff man page to stdout and exit.
     #[arg(long, hide = true)]
     pub man: bool,

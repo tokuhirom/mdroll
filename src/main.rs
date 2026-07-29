@@ -56,6 +56,11 @@ fn real_main() -> Result<()> {
         return Ok(());
     }
 
+    if let Some(name) = &cli.dump_theme {
+        print!("{}", theme::dump(&theme::load(name)?));
+        return Ok(());
+    }
+
     let settings = resolve(&cli)?;
     let theme = theme::load(&settings.theme)?;
     let (text, path) = read_input(&cli)?;

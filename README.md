@@ -125,6 +125,7 @@ on a terminal.
 | --- | --- |
 | `--theme <NAME\|PATH>` | Color theme, by name or by path to a `.toml` file. Default: `terminal` (uses your terminal's own colors). |
 | `--list-themes` | Print available theme names and exit. |
+| `--dump-theme <NAME\|PATH>` | Write a theme out as TOML and exit. A starting point for your own. |
 | `--wrap` / `--no-wrap` | Start in reflow or horizontal-scroll mode. |
 | `--source` | Start in source view instead of rendered view. |
 | `--width <N>` | Cap the reflow width. `0` means full terminal width. |
@@ -876,7 +877,7 @@ a heading beyond its colour.
 - [x] `--theme` takes a name and nothing else, so `theme::load_path` cannot be
       reached from the command line and a theme being written has to be copied
       into the config directory before it can be looked at.
-- [ ] No way to see a theme's keys from an installed binary. `themes/*.toml` are
+- [x] No way to see a theme's keys from an installed binary. `themes/*.toml` are
       in the repository, not in the build. `--dump-theme <name>` writing the
       resolved theme back out as TOML answers it, and is a starting point for a
       new theme as well as a reference that cannot drift from the code.

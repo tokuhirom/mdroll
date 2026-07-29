@@ -136,7 +136,7 @@ struct ThemeFile {
 }
 
 /// The resolved palette handed to the parser and the renderer.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Theme {
     pub name: String,
     pub foreground: Option<Color>,
@@ -340,6 +340,163 @@ impl Theme {
     }
 }
 
+/// Write a color back in a form [`parse_color`] reads.
+///
+/// The named branch is the inverse of the table in `parse_color`, including its
+/// two off-by-a-shade pairs: `white` is `Grey` and `brightwhite` is `White`.
+fn color_toml(c: Color) -> String {
+    match c {
+        Color::Rgb { r, g, b } => format!("#{r:02x}{g:02x}{b:02x}"),
+        Color::AnsiValue(n) => n.to_string(),
+        Color::Black => "black".into(),
+        Color::DarkRed => "red".into(),
+        Color::DarkGreen => "green".into(),
+        Color::DarkYellow => "yellow".into(),
+        Color::DarkBlue => "blue".into(),
+        Color::DarkMagenta => "magenta".into(),
+        Color::DarkCyan => "cyan".into(),
+        Color::Grey => "white".into(),
+        Color::DarkGrey => "brightblack".into(),
+        Color::Red => "brightred".into(),
+        Color::Green => "brightgreen".into(),
+        Color::Yellow => "brightyellow".into(),
+        Color::Blue => "brightblue".into(),
+        Color::Magenta => "brightmagenta".into(),
+        Color::Cyan => "brightcyan".into(),
+        Color::White => "brightwhite".into(),
+        Color::Reset => "reset".into(),
+    }
+}
+
+/// One style as an inline table. Attributes that are off are left out, since
+/// writing `bold = false` would suggest it can turn an attribute off, and
+/// [`Style::patch`] only ever adds them.
+fn style_toml(s: Style) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(c) = s.fg {
+        parts.push(format!("fg = \"{}\"", color_toml(c)));
+    }
+    if let Some(c) = s.bg {
+        parts.push(format!("bg = \"{}\"", color_toml(c)));
+    }
+    for (on, key) in [
+        (s.bold, "bold"),
+        (s.italic, "italic"),
+        (s.underline, "underline"),
+        (s.strikethrough, "strikethrough"),
+        (s.dim, "dim"),
+        (s.reverse, "reverse"),
+    ] {
+        if on {
+            parts.push(format!("{key} = true"));
+        }
+    }
+    if parts.is_empty() {
+        "{}".into()
+    } else {
+        format!("{{ {} }}", parts.join(", "))
+    }
+}
+
+/// Write a resolved theme back out as TOML that [`Theme::parse`] reads.
+///
+/// This is the theme reference. A key list kept by hand in the documentation
+/// goes stale the first time a key is added and nobody notices; one generated
+/// from the resolved theme cannot, and it doubles as the starting point for a
+/// new theme, which otherwise means having the repository checked out to copy
+/// `themes/*.toml` from.
+///
+/// Every key is written, including the ones left at their default, so the
+/// output says what there is to set rather than only what this theme chose to.
+pub fn dump(theme: &Theme) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("name = {:?}\n", theme.name));
+    for (key, color) in [
+        ("foreground", theme.foreground),
+        ("background", theme.background),
+    ] {
+        match color {
+            // A commented-out key still tells the reader it exists, and leaving
+            // it unset is what the `terminal` theme deliberately does.
+            None => out.push_str(&format!("# {key} = \"#rrggbb\"   # unset: inherit\n")),
+            Some(c) => out.push_str(&format!("{key} = \"{}\"\n", color_toml(c))),
+        }
+    }
+
+    out.push_str("\n[code]\n");
+    out.push_str(&format!("syntect_theme = {:?}\n", theme.syntect_theme));
+    out.push_str(&format!("fence = {}\n", style_toml(theme.code_fence)));
+
+    out.push_str("\n[heading]\n");
+    for level in 1..=6u8 {
+        out.push_str(&format!(
+            "h{level} = {}\n",
+            style_toml(theme.heading(level))
+        ));
+    }
+
+    let sections: [(&str, &[(&str, Style)]); 5] = [
+        (
+            "inline",
+            &[
+                ("link", theme.link),
+                ("code", theme.code),
+                ("emph", theme.emph),
+                ("strong", theme.strong),
+                ("strikethrough", theme.strikethrough),
+                ("footnote", theme.footnote),
+            ],
+        ),
+        (
+            "block",
+            &[
+                ("quote_bar", theme.quote_bar),
+                ("quote", theme.quote),
+                ("rule", theme.rule),
+                ("list_marker", theme.list_marker),
+                ("task_done", theme.task_done),
+                ("task_todo", theme.task_todo),
+            ],
+        ),
+        (
+            "table",
+            &[
+                ("border", theme.table_border),
+                ("header", theme.table_header),
+            ],
+        ),
+        (
+            "alert",
+            &[
+                ("note", theme.alerts[0]),
+                ("tip", theme.alerts[1]),
+                ("important", theme.alerts[2]),
+                ("warning", theme.alerts[3]),
+                ("caution", theme.alerts[4]),
+            ],
+        ),
+        (
+            "ui",
+            &[
+                ("status", theme.status),
+                ("toast", theme.toast),
+                ("cursor", theme.cursor),
+                ("search_match", theme.search_match),
+                ("search_current", theme.search_current),
+                ("hint", theme.hint),
+                ("dim", theme.dim),
+            ],
+        ),
+    ];
+    for (section, keys) in sections {
+        out.push_str(&format!("\n[{section}]\n"));
+        for (key, style) in keys {
+            out.push_str(&format!("{key} = {}\n", style_toml(*style)));
+        }
+    }
+    out
+}
+
 /// Directory holding user themes.
 pub fn user_theme_dir() -> Option<std::path::PathBuf> {
     dirs::config_dir().map(|d| d.join("mdroll").join("themes"))
@@ -458,6 +615,82 @@ mod tests {
         )
         .unwrap();
         assert_eq!(theme.heading(1).fg, theme.heading(6).fg);
+    }
+
+    #[test]
+    fn every_bundled_theme_survives_a_dump_and_a_reparse() {
+        // This is what keeps the dump honest as a reference: a key the dumper
+        // forgets, or writes in a form the parser does not read, comes back as
+        // a theme that differs from the one that was written out.
+        for (name, text) in BUNDLED {
+            let original = Theme::parse(text).unwrap();
+            let round_tripped = Theme::parse(&dump(&original))
+                .unwrap_or_else(|e| panic!("{name} did not parse after a dump: {e:#}"));
+            assert_eq!(original, round_tripped, "{name} changed across a dump");
+        }
+    }
+
+    #[test]
+    fn a_dump_names_every_key_the_parser_reads() {
+        // A theme left entirely at its defaults still documents the whole
+        // schema, which is the point of dumping one to start from.
+        let dumped = dump(&Theme::default());
+        for key in [
+            "syntect_theme",
+            "fence",
+            "h1",
+            "h6",
+            "link",
+            "footnote",
+            "quote_bar",
+            "rule",
+            "task_todo",
+            "border",
+            "header",
+            "note",
+            "caution",
+            "status",
+            "search_current",
+            "dim",
+        ] {
+            assert!(dumped.contains(key), "{key} missing from a dumped theme");
+        }
+    }
+
+    #[test]
+    fn every_color_survives_being_written_and_read_back() {
+        // The named table in `parse_color` has two pairs that are easy to get
+        // backwards — `white` is Grey and `brightwhite` is White — so every
+        // variant is checked rather than a sample.
+        let colors = [
+            Color::Rgb {
+                r: 1,
+                g: 34,
+                b: 255,
+            },
+            Color::AnsiValue(129),
+            Color::Black,
+            Color::DarkRed,
+            Color::DarkGreen,
+            Color::DarkYellow,
+            Color::DarkBlue,
+            Color::DarkMagenta,
+            Color::DarkCyan,
+            Color::Grey,
+            Color::DarkGrey,
+            Color::Red,
+            Color::Green,
+            Color::Yellow,
+            Color::Blue,
+            Color::Magenta,
+            Color::Cyan,
+            Color::White,
+            Color::Reset,
+        ];
+        for c in colors {
+            let written = color_toml(c);
+            assert_eq!(parse_color(&written).unwrap(), c, "{written:?}");
+        }
     }
 
     #[test]
