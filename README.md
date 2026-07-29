@@ -738,10 +738,10 @@ issue tracker nobody reads.
       table, because the draw path checks only for the help pane and not for the
       contents pane the way `active_doc` does. Ctrl-clicking an entry therefore
       opens an unrelated URL. `o` and `F` take the other path and are correct.
-- [ ] Every link-picker label is placed at the column of the *first* link on its
+- [x] Every link-picker label is placed at the column of the *first* link on its
       row, so a badge row gets its labels stacked in one spot and only the last
       one drawn is visible. The hit rectangles already carry the right column.
-- [ ] Only the first 26 links can be labelled, and the ones past that are not
+- [x] Only the first 26 links can be labelled, and the ones past that are not
       mentioned, which reads as the picker having missed them.
 - [ ] `y` on its own does nothing: the yank needs `yy`, and the key after `y` is
       swallowed. Both this README and the help pane document a bare `y`.

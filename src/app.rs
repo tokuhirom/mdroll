@@ -49,6 +49,27 @@ pub struct Match {
     pub end: usize,
 }
 
+/// A link drawn on screen, and where it was drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VisibleLink {
+    /// Row in the layout, not on the screen.
+    pub row: usize,
+    /// Display column the link starts at.
+    pub col: usize,
+    /// Index into [`Document::links`].
+    pub link: usize,
+}
+
+/// A labelled link, waiting for the keystroke that chooses it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Pick {
+    pub label: char,
+    pub row: usize,
+    pub col: usize,
+    /// Index into [`Document::links`].
+    pub link: usize,
+}
+
 pub struct App {
     pub settings: Settings,
     pub theme: Theme,
@@ -80,7 +101,7 @@ pub struct App {
     pub last_query: String,
     pub last_forward: bool,
 
-    pub picks: Vec<(char, usize)>,
+    pub picks: Vec<Pick>,
     pub toast: Option<(String, Instant)>,
     pub placement: Placement,
     pub quit: bool,
@@ -870,8 +891,12 @@ impl App {
 
     // ---- links -----------------------------------------------------------
 
-    /// Links currently on screen, paired with the row they were drawn on.
-    pub fn visible_links(&self) -> Vec<(usize, usize)> {
+    /// Links currently on screen, each with the row and column it was drawn at.
+    ///
+    /// The column comes from the link's own hit rectangle. A row of badges is
+    /// several links on one row, and labelling them all at the row's first
+    /// column would stack them in one place.
+    pub fn visible_links(&self) -> Vec<VisibleLink> {
         let rows = self.screen.viewport().rows;
         let end = self.scroll + self.lines_fitting(self.scroll, rows);
         let mut out = Vec::new();
@@ -881,7 +906,11 @@ impl App {
         {
             for hit in &line.hits {
                 if let HitTarget::Link(id) = hit.target {
-                    out.push((self.scroll + i, id.0));
+                    out.push(VisibleLink {
+                        row: self.scroll + i,
+                        col: hit.rect.x as usize,
+                        link: id.0,
+                    });
                 }
             }
         }
@@ -894,29 +923,35 @@ impl App {
             self.toast("no links on screen");
             return;
         }
+        // There are only so many label keys. Saying so is the difference
+        // between a picker that ran out and a picker that missed something.
+        if links.len() > PICK_KEYS.len() {
+            let extra = links.len() - PICK_KEYS.len();
+            self.toast(&format!(
+                "{extra} more link(s) than labels; scroll for them"
+            ));
+        }
         self.picks = links
-            .iter()
+            .into_iter()
             .take(PICK_KEYS.len())
             .enumerate()
-            .map(|(i, (_, id))| (PICK_KEYS[i] as char, *id))
+            .map(|(i, link)| Pick {
+                label: PICK_KEYS[i] as char,
+                row: link.row,
+                col: link.col,
+                link: link.link,
+            })
             .collect();
         self.mode = Mode::LinkPick;
     }
 
     pub fn pick_overlays(&self) -> Vec<Overlay> {
-        let links = self.visible_links();
         self.picks
             .iter()
-            .zip(links.iter())
-            .map(|((label, _), (row, _))| Overlay {
-                line: *row,
-                col: self
-                    .lines
-                    .get(*row)
-                    .and_then(|l| l.hits.first())
-                    .map(|h| h.rect.x as usize)
-                    .unwrap_or(0),
-                text: label.to_string(),
+            .map(|pick| Overlay {
+                line: pick.row,
+                col: pick.col,
+                text: pick.label.to_string(),
                 style: self.theme.hint,
             })
             .collect()
@@ -1245,9 +1280,13 @@ impl App {
     fn pick_key(&mut self, key: KeyEvent) {
         self.mode = Mode::Normal;
         if let KeyCode::Char(c) = key.code
-            && let Some((_, id)) = self.picks.iter().find(|(label, _)| *label == c)
+            && let Some(pick) = self.picks.iter().find(|pick| pick.label == c)
         {
-            let url = self.active_doc().links.get(*id).map(|l| l.url.clone());
+            let url = self
+                .active_doc()
+                .links
+                .get(pick.link)
+                .map(|l| l.url.clone());
             if let Some(url) = url {
                 self.open(&url);
             }
@@ -1784,7 +1823,37 @@ mod tests {
         press(&mut a, 'F');
         assert_eq!(a.mode, Mode::LinkPick);
         assert_eq!(a.picks.len(), 2);
-        assert_eq!(a.picks[0].0, 'a');
+        assert_eq!(a.picks[0].label, 'a');
+    }
+
+    #[test]
+    fn two_links_on_one_row_are_labelled_at_their_own_columns() {
+        // A badge row is this shape. Labelling both at the row's first column
+        // stacks them, and only the one drawn last can be seen.
+        let mut a = app("[one](https://a.example) and [two](https://b.example)\n");
+        press(&mut a, 'F');
+        let overlays = a.pick_overlays();
+        assert_eq!(overlays.len(), 2);
+        assert_eq!(overlays[0].line, overlays[1].line, "same row");
+        assert_ne!(overlays[0].col, overlays[1].col, "different columns");
+    }
+
+    #[test]
+    fn more_links_than_labels_is_said_out_loud() {
+        let mut doc = String::new();
+        for i in 0..PICK_KEYS.len() + 3 {
+            doc.push_str(&format!("- [link {i}](https://example.com/{i})\n"));
+        }
+        let mut a = app(&doc);
+        // Tall enough that every link is on screen; the picker only ever sees
+        // what is drawn.
+        a.resize(Screen::new(40, PICK_KEYS.len() as u16 + 8));
+        press(&mut a, 'F');
+        assert_eq!(a.picks.len(), PICK_KEYS.len());
+        assert!(
+            a.toast.as_ref().unwrap().0.contains("3 more link"),
+            "the ones past the last label are accounted for"
+        );
     }
 
     #[test]
