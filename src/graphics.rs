@@ -361,12 +361,17 @@ impl ImageStore {
     /// Needed after leaving and re-entering the alternate screen — an editor
     /// has been on the screen in between, and there is no way to know what
     /// survived, so everything is re-sent.
+    ///
+    /// What is *placed* is deliberately kept. That is not a cache of work
+    /// already done but a record of what is on the screen right now, and the
+    /// only thing that can retire a placement. Dropping it — as cycling the
+    /// theme does, by way of a reparse — leaves every picture that was on
+    /// screen there for good, because the next frame places the same image
+    /// under a fresh id and nothing is left that knows the old one existed.
     pub fn invalidate_uploads(&mut self) {
         self.uploaded.clear();
         self.text.clear();
         self.origin.clear();
-        self.placed_now.clear();
-        self.placed_before.clear();
     }
 
     /// Start a frame. Nothing is emitted: placements are *replaced* in place as
@@ -770,6 +775,53 @@ mod tests {
         // Dropping the fresh entry here leaves the image on screen with an
         // empty cache, so every later frame re-reads, rescales, re-encodes and
         // re-transmits the file — for as long as it stays visible.
+        assert_eq!(store.uploaded.get(&0).map(|e| e.kitty_id), Some(10));
+    }
+
+    #[test]
+    fn forgetting_the_uploads_still_leaves_the_placements_retirable() {
+        let mut store = ImageStore::new(Protocol::Kitty, CELL);
+        store.uploaded.insert(
+            0,
+            Entry {
+                kitty_id: 9,
+                cols: 4,
+                rows: 2,
+            },
+        );
+        store.origin.insert(9, Origin::Image(0));
+
+        let mut out = Vec::new();
+        store.begin_frame();
+        store.place(&mut out, 0, 4, 2, 0, 2).unwrap();
+        store.end_frame(&mut out).unwrap();
+
+        // Cycling the theme reparses the document, which forgets every upload.
+        // The picture is still on the screen while that happens.
+        store.forget_all();
+
+        // So the next frame sends it up again under a new id, and the old
+        // placement has to go with it or the two are drawn on top of each other
+        // for the rest of the session.
+        store.uploaded.insert(
+            0,
+            Entry {
+                kitty_id: 10,
+                cols: 4,
+                rows: 2,
+            },
+        );
+        store.origin.insert(10, Origin::Image(0));
+        let mut out = Vec::new();
+        store.begin_frame();
+        store.place(&mut out, 0, 4, 2, 0, 2).unwrap();
+        store.end_frame(&mut out).unwrap();
+
+        let text = String::from_utf8(out).unwrap();
+        assert!(
+            text.contains("a=d,d=i,i=9,p=9"),
+            "the placement left behind goes: {text:?}"
+        );
         assert_eq!(store.uploaded.get(&0).map(|e| e.kitty_id), Some(10));
     }
 
