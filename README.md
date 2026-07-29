@@ -333,6 +333,32 @@ Box drawings handle `flowchart` and `sequenceDiagram`. Everything else — pie
 charts, Gantt charts, state diagrams, subgraphs, anything cyclic — needs a real
 renderer, which means [mermaid-cli](https://github.com/mermaid-js/mermaid-cli):
 
+One kind of `flowchart` is declined too. Every edge crossing a rank boundary
+turns in the same place — the bus a parent's children hang off in a top-down
+chart, the column a connector turns in sideways — and two of those that overlap
+are joined rather than drawn over each other, because two edges arriving at one
+box do meet there. A run with two boxes hanging off one side and two off the
+other therefore offers all four connections, whichever of them were written:
+
+```text
+A --> C      ┌───┐   ┌───┐
+A --> D      │ A │   │ B │
+B --> C      └───┘   └───┘
+               │       │
+               ├───────┤
+               ▼       ▼
+             ┌───┐   ┌───┐
+             │ C │   │ D │
+             └───┘   └───┘
+```
+
+Those three edges and the same three with `B --> D` in place of `B --> C` draw
+the identical picture, so a chart whose run would say more than the document
+does is declined rather than drawn. Where every connection the run offers was
+written — one parent fanning out, several parents merging into one child, a
+diamond, or all four of the edges above — the picture says exactly what it
+means and is drawn as before.
+
 ```console
 $ mise use -g npm:@mermaid-js/mermaid-cli
 $ npx puppeteer browsers install chrome-headless-shell
@@ -1053,6 +1079,42 @@ And two found while reading the above:
       draws foregrounds onto a transparent canvas, so under DECDHL the span sits
       in a box and under kitty it does not. Smaller than the colour was, and the
       same shape of problem.
+
+### v1.7 — What a diagram says
+
+Found by taking the last item of v1.5 at its word. Asking whether a label could
+be made to say which edge it belongs to turned up something larger sitting
+underneath it: where two labels cannot be told apart, quite often neither can
+the edges, and sometimes there is an edge in the picture that nobody wrote.
+
+- [x] A band's shared run offers every connection between the boxes on either
+      side of it. `A --> C`, `A --> D`, `B --> C` drew the picture of all four
+      edges, and so did the same three with `B --> D` in place of `B --> C`, and
+      so did `A --> C`, `A --> D`, `B --> D`: three different graphs, one
+      drawing. `flowchart LR` did the same, and `Z --> C`, `Z --> D`,
+      `A --> D`, `B --> C` offered six connections for four edges. Declining a
+      chart whose run would say more than the document does is the smallest
+      honest answer, and it is what the renderer already does with everything
+      else it cannot model.
+- [ ] Declining is what this renderer can do about it, not what it should do.
+      A band that will not fit one run would fit two, given each parent a run of
+      its own and columns chosen so that no parent's connector has to cross
+      another's run — which is layout proper, rather than centring each rank and
+      putting every bend in one place. That is also the only thing that would
+      let a label belong to one edge and not the other, which is the v1.5 item
+      above.
+- [ ] Ordering within a rank is the order the edges were written in, so two
+      runs can interleave when nothing about the graph makes them. `A --> D`
+      then `B --> C`, where `C` and `D` were already introduced in the other
+      order, is declined for a crossing that swapping the two would remove.
+      A sweep that orders each rank to reduce crossings would give some of these
+      charts back.
+- [ ] In `flowchart LR` the corner where a connector turns is drawn hard, so
+      where two turn in the same column the second erases the first's. In a
+      diamond, `A`'s connector turns at `┐` where `┤` belongs, and the run
+      carrying its other edge stops half a cell short of it. The top-down bus
+      states its junctions as directions and joins them; the sideways one has
+      never been made to.
 
 ---
 

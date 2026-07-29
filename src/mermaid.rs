@@ -595,6 +595,10 @@ fn draw_top_down(
         }
     }
 
+    if !bus_runs_are_honest(chart, rank, |i| boxes[i].center_x()) {
+        return None;
+    }
+
     // How many edges of this band each node is an end of. A label hangs off
     // whichever of its edge's two columns is that edge's alone, and these are
     // what say which one that is.
@@ -788,6 +792,10 @@ fn draw_left_right(
         }
     }
 
+    if !bus_runs_are_honest(chart, rank, |i| boxes[i].center_y()) {
+        return None;
+    }
+
     // A label is written into the connector itself, so the space between two
     // columns has to hold it along with the arrowhead and a cell of line on
     // either side — and where labels hang at both ends of the runs, both of
@@ -948,6 +956,91 @@ fn draw_box(grid: &mut Grid, b: &Box, label: &str, shape: &Shape, calc: &WidthCa
         grid.put(x, b.y + 1, ' ', calc);
     }
     grid.text(b.x + 2, b.y + 1, label, calc);
+}
+
+/// Whether every band can be drawn without offering a connection nobody wrote.
+///
+/// A band has one shared run between two ranks: top-down, the bus every
+/// parent's edges hang off; left-to-right, the column every connector turns in.
+/// Two of them that overlap are joined rather than drawn over each other, which
+/// is deliberate — two parents arriving at one child do meet at that child's
+/// column — but joining them also joins everything else the two runs touch. A
+/// run with two boxes hanging off one side and two off the other offers all
+/// four connections, so
+///
+/// ```text
+/// A --> C      ┌───┐   ┌───┐
+/// A --> D      │ A │   │ B │
+/// B --> C      └───┘   └───┘
+///                │       │
+///                ├───────┤
+///                ▼       ▼
+///              ┌───┐   ┌───┐
+///              │ C │   │ D │
+///              └───┘   └───┘
+/// ```
+///
+/// is the same picture as those three edges plus `B --> D`, with nothing in it
+/// to say which of the two graphs it is. Three different charts drew it.
+///
+/// A run is honest exactly when the connections it offers are the edges that
+/// were written — one parent fanning out to several children, or several
+/// parents merging into one child, both of which are the whole of what a shared
+/// run can say. Where it is not, there is nothing to redraw: a second run would
+/// have to cross the first parent's connector, and box drawing has no glyph for
+/// a crossing that does not join. The chart is declined instead, and the caller
+/// falls back to `mmdc` or to showing the source, which is the same thing it
+/// does for every other construct this renderer cannot model.
+///
+/// `across` is the axis the shared run travels along: the column of a box for a
+/// top-down chart, its row for a left-to-right one. Sideways the bend column is
+/// taken to be one per band, which is what the reserved widths are worked out
+/// for; where two boxes of a rank differ in width the bends land a column or
+/// two apart, and a chart declined for overlapping there was one whose
+/// connectors ran through each other's corners anyway.
+fn bus_runs_are_honest(chart: &Flowchart, rank: &[usize], across: impl Fn(usize) -> usize) -> bool {
+    let last = rank.iter().copied().max().unwrap_or(0);
+    for band in 0..last {
+        // One run per edge, spanning between its two ends. A parent's bus is
+        // the hull of its own edges' runs, so merging runs edge by edge finds
+        // the same components as merging bus by bus.
+        let mut runs: Vec<(usize, usize, Vec<usize>, Vec<usize>)> = chart
+            .edges
+            .iter()
+            .filter(|e| rank[e.from] == band && rank[e.to] == band + 1)
+            .map(|e| {
+                let (f, t) = (across(e.from), across(e.to));
+                (f.min(t), f.max(t), vec![e.from], vec![e.to])
+            })
+            .collect();
+        runs.sort_by_key(|(lo, _, _, _)| *lo);
+
+        // Sweep, absorbing every run that reaches the one before it. Merely
+        // touching counts: two runs that share a single column share the glyph
+        // in it, and a reader follows the line straight through.
+        let mut merged: Vec<(usize, usize, Vec<usize>, Vec<usize>)> = Vec::new();
+        for run in runs {
+            match merged.last_mut() {
+                Some(prev) if run.0 <= prev.1 => {
+                    prev.1 = prev.1.max(run.1);
+                    prev.2.extend(run.2);
+                    prev.3.extend(run.3);
+                }
+                _ => merged.push(run),
+            }
+        }
+
+        for (_, _, ups, downs) in merged {
+            for from in &ups {
+                for to in &downs {
+                    if !chart.edges.iter().any(|e| e.from == *from && e.to == *to) {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    true
 }
 
 /// How many rows above the bus each edge's label sits.
@@ -2040,6 +2133,89 @@ mod tests {
         let text = out.join("\n");
         assert_eq!(text.matches('▼').count(), 2, "one head per edge: {text}");
         assert!(!text.contains('▲'), "{text}");
+    }
+
+    /// One of the sixteen subsets of the four edges between `A`,`B` and `C`,`D`.
+    fn k22_subset(dir: &str, mask: u8) -> String {
+        let mut code = format!("flowchart {dir}\n");
+        for (i, (from, to)) in [("A", "C"), ("A", "D"), ("B", "C"), ("B", "D")]
+            .iter()
+            .enumerate()
+        {
+            if mask & (1 << i) != 0 {
+                code.push_str(&format!(" {from} --> {to}\n"));
+            }
+        }
+        code
+    }
+
+    #[test]
+    fn no_two_different_charts_come_out_as_the_same_drawing() {
+        // A run with two boxes hanging off one side and two off the other
+        // offers every connection between them, whichever of them were
+        // written, so three of these subsets drew the picture of all four:
+        //
+        //     ┌───┐   ┌───┐
+        //     │ A │   │ B │
+        //     └───┘   └───┘
+        //       │       │
+        //       ├───────┤
+        //       ▼       ▼
+        //     ┌───┐   ┌───┐
+        //     │ C │   │ D │
+        //     └───┘   └───┘
+        for dir in ["TD", "LR"] {
+            let mut seen: Vec<(u8, String)> = Vec::new();
+            for mask in 1u8..16 {
+                let Some(out) = render(&k22_subset(dir, mask), &CALC) else {
+                    continue;
+                };
+                let drawing = out.join("\n");
+                if let Some((other, _)) = seen.iter().find(|(_, d)| *d == drawing) {
+                    panic!("{dir}: {mask:04b} and {other:04b} draw the same picture:\n{drawing}");
+                }
+                seen.push((mask, drawing));
+            }
+            assert!(
+                seen.iter().any(|(m, _)| *m == 0b1111),
+                "{dir}: every connection was written, which is what a run says"
+            );
+        }
+    }
+
+    #[test]
+    fn a_band_offering_a_connection_nobody_wrote_is_declined_rather_than_drawn() {
+        // Declining hands the chart to `mmdc` or shows the source. Drawing a
+        // fourth edge does neither, and says nothing about which one it is.
+        for dir in ["TD", "LR", "BT", "RL"] {
+            for code in [
+                format!("flowchart {dir}\n A --> C\n A --> D\n B --> C\n"),
+                format!("flowchart {dir}\n A --> C\n A --> D\n B --> D\n"),
+                format!("flowchart {dir}\n A --> C\n B --> C\n B --> D\n"),
+                // Three boxes reaching two between them: the run says six
+                // connections where four were written.
+                format!("flowchart {dir}\n Z --> C\n Z --> D\n A --> D\n B --> C\n"),
+            ] {
+                assert!(render(&code, &CALC).is_none(), "drawn anyway:\n{code}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_connections_a_shared_run_can_say_are_still_drawn() {
+        // One parent reaching all of its children, all of a child's parents
+        // reaching it, and the two of them stacked into a diamond, are the
+        // whole of what a run says — and are most of what anyone draws.
+        for dir in ["TD", "LR", "BT", "RL"] {
+            for code in [
+                format!("flowchart {dir}\n A --> C\n A --> D\n"),
+                format!("flowchart {dir}\n A --> C\n B --> C\n"),
+                format!("flowchart {dir}\n A --> B\n A --> C\n B --> D\n C --> D\n"),
+                format!("flowchart {dir}\n A --> C\n A --> D\n B --> C\n B --> D\n"),
+            ] {
+                assert!(render(&code, &CALC).is_some(), "declined:\n{code}");
+            }
+        }
     }
 
     #[test]
