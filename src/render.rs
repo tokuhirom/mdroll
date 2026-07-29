@@ -620,6 +620,11 @@ fn heading_runs(line: &Line, len: usize, color: (u8, u8, u8)) -> Vec<HeadingRun<
         runs.push(HeadingRun {
             text,
             color: span.style.fg.and_then(rgb_of).unwrap_or(color),
+            // Unlike the foreground there is nothing to fall back to: a
+            // heading with no background of its own is drawn on whatever the
+            // terminal is showing, and only a span that asks for one gets a
+            // block.
+            bg: span.style.bg.and_then(rgb_of),
         });
     }
     runs
@@ -732,6 +737,57 @@ mod tests {
         let runs = heading_runs(&line, line.text().trim_end().len(), (9, 9, 9));
         assert_eq!(runs[0].color, (9, 9, 9), "the margin took a colour");
         assert_eq!(runs[1].color, (1, 2, 3));
+    }
+
+    #[test]
+    fn a_span_carries_its_background_into_the_bitmap_and_the_others_get_none() {
+        // A code span in a heading has one — `code = { bg = "#44475a" }` in
+        // Dracula — and under DECDHL the terminal paints it. There is nothing
+        // to fall back to for the spans around it: a heading has no background
+        // of its own, so they are drawn on whatever the terminal is showing.
+        let code = Style {
+            fg: Some(Color::Rgb {
+                r: 255,
+                g: 121,
+                b: 198,
+            }),
+            bg: Some(Color::Rgb {
+                r: 68,
+                g: 71,
+                b: 90,
+            }),
+            ..Style::PLAIN
+        };
+        let mut line = Line::new(
+            1,
+            0,
+            vec![Span::plain("See "), Span::new("config.toml", code)],
+        );
+        line.heading = Some(1);
+        let runs = heading_runs(&line, line.text().trim_end().len(), (9, 9, 9));
+        assert_eq!(runs[0].bg, None, "a plain span was given a background");
+        assert_eq!(runs[1].bg, Some((68, 71, 90)));
+    }
+
+    #[test]
+    fn a_palette_background_is_left_off_the_bitmap_the_way_a_palette_colour_is() {
+        // A palette entry has no single true RGB — what 4 looks like is the
+        // terminal's business — so rasterizing it would be a guess, and a
+        // guessed block behind a code span is more wrong than none.
+        let mut line = Line::new(
+            1,
+            0,
+            vec![Span::new(
+                "config.toml",
+                Style {
+                    bg: Some(Color::AnsiValue(4)),
+                    ..Style::PLAIN
+                },
+            )],
+        );
+        line.heading = Some(1);
+        let runs = heading_runs(&line, line.text().trim_end().len(), (9, 9, 9));
+        assert_eq!(runs[0].bg, None);
     }
 
     #[test]

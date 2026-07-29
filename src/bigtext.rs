@@ -109,6 +109,13 @@ impl HeadingDecor {
 pub struct Run<'a> {
     pub text: &'a str,
     pub color: (u8, u8, u8),
+    /// A block of colour behind the run, for a span the theme gives one to.
+    ///
+    /// A code span is the case that has one. Under DECDHL the terminal paints
+    /// the cell background across both rows of the heading; the bitmap has to
+    /// do the same or the same span sits in a box on one terminal and not on
+    /// the other.
+    pub bg: Option<(u8, u8, u8)>,
 }
 
 /// Paint a solid rectangle, clipped to the canvas.
@@ -130,6 +137,28 @@ fn fill(
             canvas[i] = color.0;
             canvas[i + 1] = color.1;
             canvas[i + 2] = color.2;
+            canvas[i + 3] = 255;
+        }
+    }
+}
+
+/// Paint `color` *behind* whatever occupies `x`, over the full height.
+///
+/// It has to go behind rather than in front, and it cannot be laid down before
+/// the glyphs either: the glyph pass keeps the strongest coverage rather than
+/// compositing, so an already-filled cell would have swallowed every letter
+/// drawn onto it. Blending afterwards costs one pass over the block and leaves
+/// the antialiased edge of a letter fading into the background it sits on
+/// instead of into whatever happens to be behind the terminal.
+fn under(canvas: &mut [u8], width: u32, height: u32, x: std::ops::Range<u32>, color: (u8, u8, u8)) {
+    for py in 0..height {
+        for px in x.start..x.end.min(width) {
+            let i = ((py * width + px) * 4) as usize;
+            let a = canvas[i + 3] as u32;
+            let blend = |fg: u8, bg: u8| ((fg as u32 * a + bg as u32 * (255 - a)) / 255) as u8;
+            canvas[i] = blend(canvas[i], color.0);
+            canvas[i + 1] = blend(canvas[i + 1], color.1);
+            canvas[i + 2] = blend(canvas[i + 2], color.2);
             canvas[i + 3] = 255;
         }
     }
@@ -221,9 +250,9 @@ impl Renderer {
 
     /// Draw `runs` into an RGBA bitmap `cols` by `rows` cells in size.
     ///
-    /// The background stays transparent so the terminal's own background, and
-    /// any image behind it, shows through — the same reason the `terminal`
-    /// theme paints no background of its own.
+    /// The background stays transparent, except under a run that asks for one,
+    /// so the terminal's own background and any image behind it show through —
+    /// the same reason the `terminal` theme paints no background of its own.
     pub fn render(
         &self,
         runs: &[Run<'_>],
@@ -254,9 +283,16 @@ impl Renderer {
         // glyphs, not with the left edge of the screen.
         let mut text_start: Option<f32> = None;
         let mut text_end = 0.0f32;
+        // Where each run that has a background begins and ends, to be filled
+        // in once the glyphs are down. The extent is the run's advance rather
+        // than its ink, because a cell background covers the whole cell,
+        // including the space between two words inside the same span.
+        let mut backgrounds: Vec<(u32, u32, (u8, u8, u8))> = Vec::new();
+        let mut clipped = false;
 
-        'runs: for run in runs {
+        for run in runs {
             let color = run.color;
+            let run_start = pen.max(0.0);
             for c in run.text.chars() {
                 if !c.is_whitespace() {
                     text_start.get_or_insert(pen);
@@ -294,9 +330,27 @@ impl Renderer {
                     text_end = pen;
                 }
                 if pen > width as f32 {
-                    break 'runs;
+                    clipped = true;
+                    break;
                 }
             }
+            // A clipped run still gets the background it managed to draw, so a
+            // code span cut off by the right edge does not lose its block for
+            // the part that is on screen.
+            if let Some(bg) = run.bg {
+                let start = run_start as u32;
+                let end = (pen.max(0.0) as u32).min(width);
+                if end > start {
+                    backgrounds.push((start, end, bg));
+                }
+            }
+            if clipped {
+                break;
+            }
+        }
+
+        for (start, end, color) in backgrounds {
+            under(&mut canvas, width, height, start..end, color);
         }
 
         if !decor.is_none() {
@@ -324,6 +378,15 @@ mod tests {
         Renderer::discover()
     }
 
+    /// A run with no background, which is every span but a code one.
+    fn run(text: &str, color: (u8, u8, u8)) -> Run<'_> {
+        Run {
+            text,
+            color,
+            bg: None,
+        }
+    }
+
     #[test]
     fn a_font_is_found_on_this_machine_or_rasterizing_is_declined() {
         // Never a hard failure: a machine with no fonts simply does not offer
@@ -341,10 +404,7 @@ mod tests {
         };
         let png = renderer
             .render(
-                &[Run {
-                    text: "Heading",
-                    color: (255, 0, 0),
-                }],
+                &[run("Heading", (255, 0, 0))],
                 20,
                 2,
                 CELL,
@@ -364,10 +424,7 @@ mod tests {
         };
         let png = renderer
             .render(
-                &[Run {
-                    text: "I",
-                    color: (255, 255, 255),
-                }],
+                &[run("I", (255, 255, 255))],
                 10,
                 2,
                 CELL,
@@ -387,10 +444,7 @@ mod tests {
         };
         let png = renderer
             .render(
-                &[Run {
-                    text: "HHHH",
-                    color: (10, 200, 30),
-                }],
+                &[run("HHHH", (10, 200, 30))],
                 12,
                 2,
                 CELL,
@@ -414,10 +468,7 @@ mod tests {
         // bitmap comes out blank.
         let png = renderer
             .render(
-                &[Run {
-                    text: "日本語の見出し",
-                    color: (255, 255, 255),
-                }],
+                &[run("日本語の見出し", (255, 255, 255))],
                 30,
                 2,
                 CELL,
@@ -439,10 +490,7 @@ mod tests {
         };
         let latin = renderer
             .render(
-                &[Run {
-                    text: "Heading",
-                    color: (255, 255, 255),
-                }],
+                &[run("Heading", (255, 255, 255))],
                 30,
                 2,
                 CELL,
@@ -451,10 +499,7 @@ mod tests {
             .unwrap();
         let mixed = renderer
             .render(
-                &[Run {
-                    text: "Heading 見出し",
-                    color: (255, 255, 255),
-                }],
+                &[run("Heading 見出し", (255, 255, 255))],
                 30,
                 2,
                 CELL,
@@ -493,10 +538,7 @@ mod tests {
     fn text_left(renderer: &Renderer, text: &str) -> u32 {
         let png = renderer
             .render(
-                &[Run {
-                    text,
-                    color: (255, 255, 255),
-                }],
+                &[run(text, (255, 255, 255))],
                 40,
                 2,
                 CELL,
@@ -514,10 +556,7 @@ mod tests {
     fn border_pixels(renderer: &Renderer, text: &str) -> Vec<(u32, u32)> {
         let png = renderer
             .render(
-                &[Run {
-                    text,
-                    color: (255, 255, 255),
-                }],
+                &[run(text, (255, 255, 255))],
                 40,
                 2,
                 CELL,
@@ -570,10 +609,7 @@ mod tests {
         let text = "        Heading";
         let png = renderer
             .render(
-                &[Run {
-                    text,
-                    color: (255, 255, 255),
-                }],
+                &[run(text, (255, 255, 255))],
                 40,
                 2,
                 CELL,
@@ -602,10 +638,7 @@ mod tests {
         // option that does not draw over the first glyph.
         let png = renderer
             .render(
-                &[Run {
-                    text: "Heading",
-                    color: (255, 255, 255),
-                }],
+                &[run("Heading", (255, 255, 255))],
                 40,
                 2,
                 CELL,
@@ -629,10 +662,7 @@ mod tests {
         };
         let png = renderer
             .render(
-                &[Run {
-                    text: "  Hi",
-                    color: (255, 255, 255),
-                }],
+                &[run("  Hi", (255, 255, 255))],
                 40,
                 2,
                 CELL,
@@ -658,16 +688,7 @@ mod tests {
         // the whole heading was flattened to the first colour found.
         let png = renderer
             .render(
-                &[
-                    Run {
-                        text: "See ",
-                        color: (255, 0, 0),
-                    },
-                    Run {
-                        text: "config",
-                        color: (0, 255, 0),
-                    },
-                ],
+                &[run("See ", (255, 0, 0)), run("config", (0, 255, 0))],
                 40,
                 2,
                 CELL,
@@ -689,6 +710,74 @@ mod tests {
     }
 
     #[test]
+    fn a_run_with_a_background_sits_on_a_block_of_it_without_losing_its_letters() {
+        let Some(renderer) = renderer() else {
+            return;
+        };
+        // Dracula gives a code span `bg = "#44475a"`, and under DECDHL the
+        // terminal paints that across both rows of the cell. Drawing the
+        // foregrounds onto a transparent canvas put the same span in a box on
+        // one terminal and not on the other.
+        let png = renderer
+            .render(
+                &[
+                    run("See ", (255, 0, 0)),
+                    Run {
+                        text: "config",
+                        color: (0, 255, 0),
+                        bg: Some((68, 71, 90)),
+                    },
+                ],
+                40,
+                2,
+                CELL,
+                HeadingDecor::default(),
+            )
+            .unwrap();
+        let image = decoded(&png);
+        let block = pixels_of(&image, [68, 71, 90, 255]);
+        assert!(!block.is_empty(), "no background drawn");
+        assert!(
+            !pixels_of(&image, [0, 255, 0, 255]).is_empty(),
+            "the background swallowed the glyphs"
+        );
+
+        // It fills both rows, the way a cell background does, rather than
+        // hugging the letters.
+        let rows: std::collections::HashSet<u32> = block.iter().map(|(_, y)| *y).collect();
+        assert_eq!(
+            rows.len(),
+            image.height() as usize,
+            "the block covers {} of {} rows",
+            rows.len(),
+            image.height()
+        );
+
+        // And it stops where the run does. The words in front of it have no
+        // background of their own and must be left on the terminal's.
+        let left = block.iter().map(|(x, _)| *x).min().unwrap();
+        let red_right = pixels_of(&image, [255, 0, 0, 255])
+            .iter()
+            .map(|(x, _)| *x)
+            .max()
+            .unwrap();
+        assert!(
+            left > red_right,
+            "the block started at {left}px, over a run that ends at {red_right}px"
+        );
+        let right = block.iter().map(|(x, _)| *x).max().unwrap();
+        assert!(
+            right < image.width() - 1,
+            "the block ran to the edge of the canvas"
+        );
+        assert_eq!(
+            image.get_pixel(image.width() - 1, 0).0[3],
+            0,
+            "the background filled the whole row"
+        );
+    }
+
+    #[test]
     fn a_run_wide_enough_to_fill_the_canvas_stops_the_ones_after_it() {
         let Some(renderer) = renderer() else {
             return;
@@ -698,14 +787,8 @@ mod tests {
         let png = renderer
             .render(
                 &[
-                    Run {
-                        text: &"wide ".repeat(50),
-                        color: (255, 255, 255),
-                    },
-                    Run {
-                        text: "tail",
-                        color: (0, 255, 0),
-                    },
+                    run(&"wide ".repeat(50), (255, 255, 255)),
+                    run("tail", (0, 255, 0)),
                 ],
                 10,
                 2,
@@ -727,10 +810,7 @@ mod tests {
         assert!(
             renderer
                 .render(
-                    &[Run {
-                        text: "   ",
-                        color: (0, 0, 0)
-                    }],
+                    &[run("   ", (0, 0, 0))],
                     10,
                     2,
                     CELL,
@@ -740,16 +820,7 @@ mod tests {
         );
         assert!(
             renderer
-                .render(
-                    &[Run {
-                        text: "x",
-                        color: (0, 0, 0)
-                    }],
-                    0,
-                    2,
-                    CELL,
-                    HeadingDecor::default()
-                )
+                .render(&[run("x", (0, 0, 0))], 0, 2, CELL, HeadingDecor::default())
                 .is_none()
         );
     }
@@ -761,10 +832,7 @@ mod tests {
         };
         let png = renderer
             .render(
-                &[Run {
-                    text: &"wide ".repeat(50),
-                    color: (255, 255, 255),
-                }],
+                &[run(&"wide ".repeat(50), (255, 255, 255))],
                 10,
                 2,
                 CELL,

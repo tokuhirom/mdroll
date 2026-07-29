@@ -578,7 +578,10 @@ the heading is instead rendered to a bitmap at twice the cell height and placed
 with the Kitty graphics protocol over the two rows the layout already reserved.
 The layout does not need to know which path was taken: a double-height line
 occupies two rows and half the columns either way. The bitmap is transparent
-behind the glyphs, so the terminal's own background keeps showing through.
+behind the glyphs, so the terminal's own background keeps showing through —
+except under a span the theme gives a background of its own, such as a code span
+inside a heading, which gets a block across both rows the way the terminal would
+paint the cell.
 
 The font comes from `fc-match sans-serif:bold`, falling back to a short list of
 usual locations. If nothing is found, big headings are simply not offered.
@@ -1045,7 +1048,7 @@ And two found while reading the above:
       exactly the terminals that get the bitmap. `` # See `config.toml` ``
       renders the code span in its own colour under DECDHL and in the heading's
       colour under kitty.
-- [ ] A span's *background* still does not survive rasterizing. A code span in a
+- [x] A span's *background* still does not survive rasterizing. A code span in a
       heading has one — `code = { bg = "#44475a" }` in Dracula — and the bitmap
       draws foregrounds onto a transparent canvas, so under DECDHL the span sits
       in a box and under kitty it does not. Smaller than the colour was, and the
