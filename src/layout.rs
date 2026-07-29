@@ -125,7 +125,14 @@ impl<'a> Ctx<'a> {
             }
             BlockKind::Heading(level) => {
                 let level = *level;
+                let first = self.lines.len();
                 self.flow(idx, block, self.heading_scale(level));
+                // A heading that wraps produces several rows, and every one of
+                // them is part of the heading; the decoration decides for
+                // itself which of them it applies to.
+                for line in &mut self.lines[first..] {
+                    line.heading = Some(level);
+                }
             }
             _ => self.flow(idx, block, Scale::Normal),
         }
@@ -1062,6 +1069,49 @@ mod tests {
             lines.iter().all(|l| calc.str(&l.text()) <= 12),
             "{lines:#?}"
         );
+    }
+
+    #[test]
+    fn every_row_of_a_heading_carries_its_level_and_nothing_else_does() {
+        let theme = Theme::default();
+        // Wide enough for the h3 and far too narrow for the h1, so the heading
+        // that wraps is covered as well as the one that does not.
+        let doc = parse(
+            "# alpha beta gamma delta epsilon\n\n### short\n\nbody\n",
+            &theme,
+        );
+        let lines = layout(&doc, Viewport::new(20, 24), &Options::default(), &theme);
+        let levels: Vec<Option<u8>> = lines
+            .iter()
+            .filter(|l| !l.is_blank())
+            .map(|l| l.heading)
+            .collect();
+        assert!(
+            levels.iter().filter(|h| **h == Some(1)).count() >= 2,
+            "a wrapped heading must tag all of its rows: {levels:?}"
+        );
+        assert!(levels.contains(&Some(3)), "{levels:?}");
+        assert!(levels.contains(&None), "body text must carry no level");
+    }
+
+    #[test]
+    fn a_heading_below_the_double_height_cutoff_still_carries_its_level() {
+        // The level is not recoverable from the scale: h3 is drawn at normal
+        // size, and with double height off so is h1.
+        let theme = Theme::default();
+        let doc = parse("# top\n", &theme);
+        let lines = layout(
+            &doc,
+            Viewport::new(40, 24),
+            &Options {
+                double_height: false,
+                ..Options::default()
+            },
+            &theme,
+        );
+        let line = lines.iter().find(|l| !l.is_blank()).unwrap();
+        assert_eq!(line.scale, Scale::Normal);
+        assert_eq!(line.heading, Some(1));
     }
 
     #[test]
