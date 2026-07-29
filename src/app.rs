@@ -554,6 +554,23 @@ impl App {
         count.max(1)
     }
 
+    /// Largest horizontal offset that still leaves content on screen.
+    ///
+    /// Without it, `l` in no-wrap mode walks off the right-hand end of the
+    /// widest line and into empty screens, with nothing to say how far back the
+    /// text is. The widest line is measured rather than remembered, because it
+    /// changes with every relayout and this runs only on a keystroke.
+    pub fn max_hoffset(&self) -> usize {
+        let widest = self
+            .lines
+            .iter()
+            .map(|line| self.calc().str(&line.text()))
+            .max()
+            .unwrap_or(0);
+        // One screenful of the widest line stays visible.
+        widest.saturating_sub(self.screen.viewport().cols as usize)
+    }
+
     /// Largest scroll position that still fills the viewport from the bottom.
     pub fn max_scroll(&self) -> usize {
         let rows = self.screen.viewport().rows;
@@ -1408,7 +1425,7 @@ impl App {
             Action::ScrollLeft => self.hoffset = self.hoffset.saturating_sub(4),
             Action::ScrollRight => {
                 if !self.wrap {
-                    self.hoffset += 4;
+                    self.hoffset = (self.hoffset + 4).min(self.max_hoffset());
                 }
             }
             Action::ResetScroll => self.hoffset = 0,
@@ -1718,7 +1735,8 @@ mod tests {
 
     #[test]
     fn horizontal_scrolling_only_applies_without_wrap() {
-        let mut a = app("a long line of text\n");
+        // Wider than the 40-column test screen, or there is nowhere to scroll.
+        let mut a = app(&format!("{}\n", "a long line of text ".repeat(6)));
         press(&mut a, 'l');
         assert_eq!(a.hoffset, 0, "wrap mode has nothing to scroll to");
         press(&mut a, 'w');
@@ -1983,6 +2001,21 @@ mod tests {
         assert_eq!(slugify("v0.9 — Mermaid"), "v09--mermaid");
         // Non-ASCII letters are kept, as GitHub keeps them.
         assert_eq!(slugify("見出し"), "見出し");
+    }
+
+    #[test]
+    fn horizontal_scrolling_stops_at_the_widest_line() {
+        let mut a = app("short\n");
+        a.wrap = false;
+        a.relayout();
+        for _ in 0..50 {
+            a.act(&mut Vec::new(), Action::ScrollRight).unwrap();
+        }
+        assert_eq!(
+            a.hoffset,
+            a.max_hoffset(),
+            "no running off the end into empty screens"
+        );
     }
 
     #[test]

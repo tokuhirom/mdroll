@@ -748,7 +748,7 @@ issue tracker nobody reads.
 - [x] In-document anchor links — `[Terminal support](#terminal-support)`, which
       this file itself uses — are handed to the system opener instead of jumping
       to the heading. The contents pane already maps `#line-N` this way.
-- [ ] Horizontal scrolling has no right-hand bound, so holding `l` in no-wrap
+- [x] Horizontal scrolling has no right-hand bound, so holding `l` in no-wrap
       mode runs off the end of the content and into empty screens.
 - [ ] `mmdc` is never found on Windows, where it is `mmdc.cmd`: the `PATH`
       search consults neither `PATHEXT` nor the executable bit.
