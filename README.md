@@ -549,7 +549,13 @@ about 1.5 seconds rather than a permanent status line — it costs no rows at al
 
 ### Headings
 
-On terminals supporting DECDHL, `# Heading` is emitted as double-height text:
+`#` and `##` are drawn large; `###` and below get colour and weight only. Two
+levels is where GitHub stops setting a heading apart structurally as well — it
+is the same pair it draws a bottom border under — and a terminal has few rows to
+spend, so a document whose every level is double-height reads as no hierarchy at
+all.
+
+On terminals supporting DECDHL, such a heading is emitted as double-height text:
 
 ```
 \e#3Heading      ← top half
@@ -948,7 +954,7 @@ a heading beyond its colour.
 
 And two found while reading the above:
 
-- [ ] The Headings section says `# Heading` is emitted double-height, but
+- [x] The Headings section says `# Heading` is emitted double-height, but
       `heading_scale` does it for every heading up to level 2. `##` is drawn
       large and the document does not say so.
 - [ ] Rasterizing flattens a heading to one string and one colour, taken from
