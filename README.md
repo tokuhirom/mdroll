@@ -202,7 +202,7 @@ gives you the text exactly as written.
 | --- | --- |
 | `Tab` | Move block cursor forward |
 | `Shift-Tab` | Move block cursor backward |
-| `y` | Yank block as Markdown source |
+| `yy` | Yank block as Markdown source |
 | `Y` | Yank block as rendered plain text |
 | `yc` | Yank code block contents only, without the fences |
 | `V` | Line selection mode — extend with `j`/`k`, confirm with `y` |
@@ -743,7 +743,7 @@ issue tracker nobody reads.
       one drawn is visible. The hit rectangles already carry the right column.
 - [x] Only the first 26 links can be labelled, and the ones past that are not
       mentioned, which reads as the picker having missed them.
-- [ ] `y` on its own does nothing: the yank needs `yy`, and the key after `y` is
+- [x] `y` on its own does nothing: the yank needs `yy`, and the key after `y` is
       swallowed. Both this README and the help pane document a bare `y`.
 - [ ] In-document anchor links — `[Terminal support](#terminal-support)`, which
       this file itself uses — are handed to the system opener instead of jumping

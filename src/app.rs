@@ -1325,14 +1325,17 @@ impl App {
     }
 
     fn normal_key<W: Write>(&mut self, out: &mut W, key: KeyEvent) -> Result<()> {
-        // Two-key sequences: `y` waits for `c` or `p`.
+        // Two-key sequences: `yy`, `yc`, `yp`. Anything else after `y` was not
+        // meant as a yank, so the sequence is abandoned and the key is handled
+        // as itself rather than swallowed — pressing `y` by accident should
+        // cost nothing.
         if let Some('y') = self.pending {
             self.pending = None;
             match key.code {
                 KeyCode::Char('c') => return self.yank(out, Yank::CodeBody),
                 KeyCode::Char('p') => return self.yank(out, Yank::Path),
                 KeyCode::Char('y') => return self.yank(out, Yank::Source),
-                _ => return Ok(()),
+                _ => {}
             }
         }
 
@@ -1854,6 +1857,18 @@ mod tests {
             a.toast.as_ref().unwrap().0.contains("3 more link"),
             "the ones past the last label are accounted for"
         );
+    }
+
+    #[test]
+    fn a_key_that_does_not_follow_y_is_still_itself() {
+        // `y` alone is not a yank — `yy` is — so the key after it was meant as
+        // itself and must not be swallowed.
+        let mut a = app("# One\n\nline\n\n# Two\n\nline\n\n# Three\n\nline\n");
+        let before = a.scroll;
+        press(&mut a, 'y');
+        press(&mut a, 'j');
+        assert_eq!(a.scroll, before + 1, "j scrolled");
+        assert!(a.pending.is_none());
     }
 
     #[test]
