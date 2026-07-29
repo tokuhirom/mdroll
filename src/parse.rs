@@ -124,9 +124,33 @@ impl<'t> Builder<'t> {
             NodeValue::Document => self.blocks(node),
 
             NodeValue::FrontMatter(text) => {
-                let mut block = Block::new(BlockKind::Code { lang: None }, range);
-                block.spans = vec![Span::new(text.trim_end().to_string(), self.theme.dim)];
-                self.push(block);
+                // GitHub draws this as a table, which is what makes an ADR
+                // readable: status and date are the first things wanted, and a
+                // block of `key: value` is a poor way to read them. Front
+                // matter that is more than the parsed subset falls back to its
+                // source, the way an HTML block does.
+                match crate::frontmatter::parse(&text) {
+                    Some(entries) => {
+                        let mut table = Table {
+                            align: vec![Align::Left; 2],
+                            ..Table::default()
+                        };
+                        for (key, value) in entries {
+                            table.rows.push(vec![
+                                vec![Span::new(key, self.theme.table_header)],
+                                vec![Span::new(value, self.theme.body())],
+                            ]);
+                        }
+                        let mut block = Block::new(BlockKind::Table, range);
+                        block.table = Some(table);
+                        self.push(block);
+                    }
+                    None => {
+                        let mut block = Block::new(BlockKind::Code { lang: None }, range);
+                        block.spans = vec![Span::new(text.trim_end().to_string(), self.theme.dim)];
+                        self.push(block);
+                    }
+                }
             }
 
             NodeValue::Paragraph => {
@@ -1323,6 +1347,35 @@ mod tests {
         let d = doc("Visit https://example.com today.\n");
         assert_eq!(d.links.len(), 1);
         assert_eq!(d.links[0].url, "https://example.com");
+    }
+
+    #[test]
+    fn front_matter_becomes_a_table_of_its_keys() {
+        let d = doc("---\ntitle: An ADR\nstatus: accepted\n---\n\n# Body\n");
+        let table = d.blocks[0].table.as_ref().expect("a table");
+        assert!(table.head.is_empty(), "keys are not a header row");
+        let cells: Vec<(String, String)> = table
+            .rows
+            .iter()
+            .map(|row| {
+                let text = |cell: &Vec<Span>| cell.iter().map(|s| s.text.as_str()).collect();
+                (text(&row[0]), text(&row[1]))
+            })
+            .collect();
+        assert_eq!(
+            cells,
+            [
+                ("title".to_string(), "An ADR".to_string()),
+                ("status".to_string(), "accepted".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn front_matter_beyond_the_subset_stays_as_source() {
+        let d = doc("---\nowner:\n  name: Ada\n---\n\n# Body\n");
+        assert!(matches!(d.blocks[0].kind, BlockKind::Code { .. }));
+        assert!(d.blocks[0].text().contains("name: Ada"));
     }
 
     #[test]
