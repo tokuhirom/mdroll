@@ -233,6 +233,10 @@ Links are also emitted as OSC 8 hyperlinks, so `Cmd`-click (macOS) or
 `Ctrl`-click opens them directly through the terminal without `mdroll` capturing
 the mouse.
 
+`T` marks the entry you are already inside, the way the block cursor marks the
+block you are on, and opens on that part of itself rather than on its own first
+line. Above the first heading there is no entry to mark and none is marked.
+
 `T` and `H` put a pane over the document, and closing one comes back to the row
 you were reading rather than to the top. The contents pane is where a reader
 goes precisely when they have not decided to move yet, so deciding against it
@@ -1248,11 +1252,14 @@ already was, and that visiting it moved them.
       particular is where a reader goes when they have not decided to move at
       all — so the one gesture that should have cost nothing cost them their
       place, and in a long document there was no way back to it.
-- [ ] The contents pane lists every heading and marks none of them, so a reader
+- [x] The contents pane lists every heading and marks none of them, so a reader
       who opens it to find out where they are has to work it out from the
       headings around the one they came from. The status line already computes
       the enclosing section for its breadcrumb, and the pane is drawn by the
-      same machinery that highlights a search match.
+      same machinery that highlights a search match. Marking it is also what
+      makes the pane worth opening in a document with thirty headings, where
+      the entry is off the first screenful and the pane used to open at its
+      own top: the mark is what it scrolls to.
 
 ---
 
