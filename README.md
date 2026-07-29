@@ -850,7 +850,7 @@ Four more, found while fixing those rather than by reading:
       one's corner to reach it. It stopped dead there and started again on the
       far side — `└───┘─┐─┐` in a `TD` chart, and two `└` under each other in an
       `LR` one, the upper one a line arriving from nowhere.
-- [ ] Two labelled edges that meet at one node write their labels in the same
+- [x] Two labelled edges that meet at one node write their labels in the same
       place, so the second is drawn over the first: `A -->|from a| C` beside
       `B -->|from b| C` reads `from bm a`. A label goes to the end of its edge
       where a fan's edges are each on a row of their own, and at a join it is

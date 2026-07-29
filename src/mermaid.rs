@@ -600,8 +600,20 @@ fn draw_top_down(
     }
     let height = y;
 
-    // An edge label goes beside its child's column, on the far side from the
-    // parent, and needs room there. Nothing accounted for it, so a label wide
+    // How many edges of this band each node is an end of. A label hangs off
+    // whichever of its edge's two columns is that edge's alone, and these are
+    // what say which one that is.
+    let mut parents = vec![0usize; chart.nodes.len()];
+    let mut children = vec![0usize; chart.nodes.len()];
+    for edge in &chart.edges {
+        if rank[edge.to] == rank[edge.from] + 1 {
+            parents[edge.to] += 1;
+            children[edge.from] += 1;
+        }
+    }
+
+    // An edge label goes beside a column, on the far side from the other end of
+    // the edge, and needs room there. Nothing accounted for it, so a label wide
     // enough ran off the right of the canvas and was cut off mid-word.
     let (mut margin, mut extent) = (0usize, 0usize);
     for edge in &chart.edges {
@@ -611,10 +623,10 @@ fn draw_top_down(
         }
         let w = calc.str(label);
         let (fx, tx) = (boxes[edge.from].center_x(), boxes[edge.to].center_x());
-        if tx > fx {
-            extent = extent.max(tx + 1 + w);
-        } else {
-            margin = margin.max((w + 1).saturating_sub(fx));
+        let shared = parents[edge.to] > 1 && children[edge.from] == 1;
+        match label_start(fx, tx, w, shared) {
+            start if start < 0 => margin = margin.max(start.unsigned_abs()),
+            start => extent = extent.max(start as usize + w),
         }
     }
     for b in &mut boxes {
@@ -643,17 +655,18 @@ fn draw_top_down(
     // Children of the same parent share one horizontal bus, so the glyph where
     // the bus meets the parent has to know about all of them at once.
     for parent in 0..chart.nodes.len() {
-        let children: Vec<&Edge> = chart
+        let fan: Vec<&Edge> = chart
             .edges
             .iter()
             .filter(|e| e.from == parent && rank[e.to] == rank[parent] + 1)
             .collect();
-        if !children.is_empty() {
+        if !fan.is_empty() {
             fan_out(
                 &mut grid,
                 &boxes[parent],
-                &children,
+                &fan,
                 &boxes,
+                &parents,
                 chart.reversed,
                 calc,
             );
@@ -719,18 +732,43 @@ fn draw_left_right(
         })
         .collect();
 
-    // A label is written into the connector itself, at the end that arrives at
-    // the target, so the space between two columns has to hold the label, the
-    // arrowhead, and a cell of line on either side of them.
-    let mut widest = vec![0usize; by_rank.len()];
+    // How many edges of this band each node is an end of, which is what says
+    // which end of its run a label can hang at without meeting another.
+    let mut parents = vec![0usize; chart.nodes.len()];
+    let mut children = vec![0usize; chart.nodes.len()];
+    for edge in &chart.edges {
+        if rank[edge.to] == rank[edge.from] + 1 {
+            parents[edge.to] += 1;
+            children[edge.from] += 1;
+        }
+    }
+    let side = |edge: &Edge| label_at_left(chart.reversed, parents[edge.to], children[edge.from]);
+
+    // A label is written into the connector itself, so the space between two
+    // columns has to hold it along with the arrowhead and a cell of line on
+    // either side — and where labels hang at both ends of the runs, both of
+    // them and the bend in between.
+    let mut widest = vec![(0usize, 0usize); by_rank.len()];
     for edge in &chart.edges {
         let Some(label) = &edge.label else { continue };
         if rank[edge.to] == rank[edge.from] + 1 {
-            let r = rank[edge.from];
-            widest[r] = widest[r].max(calc.str(label));
+            let end = &mut widest[rank[edge.from]];
+            let w = if side(edge) { &mut end.0 } else { &mut end.1 };
+            *w = (*w).max(calc.str(label));
         }
     }
-    let gap: Vec<usize> = widest.iter().map(|w| (w + 5).max(BAND * 2)).collect();
+    let gap: Vec<usize> = widest
+        .iter()
+        .map(|end| {
+            match *end {
+                (0, 0) => 0,
+                (l, 0) => l + 6,
+                (0, r) => r + 5,
+                (l, r) => l + r + 7,
+            }
+            .max(BAND * 2)
+        })
+        .collect();
 
     let mut x = 0usize;
     for (r, nodes) in by_rank.iter().enumerate() {
@@ -767,8 +805,11 @@ fn draw_left_right(
                 &mut grid,
                 &boxes[edge.from],
                 &boxes[edge.to],
-                edge.label.as_deref(),
-                widest[rank[edge.from]],
+                &EdgeLabel {
+                    text: edge.label.as_deref(),
+                    at_left: side(edge),
+                    reserved: widest[rank[edge.from]],
+                },
                 chart.reversed,
                 calc,
             );
@@ -820,6 +861,24 @@ fn draw_box(grid: &mut Grid, b: &Box, label: &str, shape: &Shape, calc: &WidthCa
     grid.text(b.x + 2, b.y + 1, label, calc);
 }
 
+/// Where an edge's label starts on the row above the bus.
+///
+/// It has to hang off a column that is this edge's alone, or two labels land on
+/// each other. The children of one parent each have a column to themselves,
+/// which is the usual case; but several parents arriving at one child share the
+/// child's column, and then it is their own that tells them apart.
+///
+/// Signed, because a label to the left of the leftmost column falls off the
+/// canvas, and how far it does is how much the canvas is widened to hold it.
+fn label_start(fx: usize, tx: usize, w: usize, shared_child: bool) -> isize {
+    let (fx, tx, w) = (fx as isize, tx as isize, w as isize);
+    match (shared_child, tx > fx) {
+        (false, true) => tx + 1,
+        (true, false) => fx + 1,
+        _ => fx - w - 1,
+    }
+}
+
 /// Draw the band that carries one parent's edges down to the next rank.
 ///
 /// All of a parent's children hang off a single horizontal bus. The glyph where
@@ -833,6 +892,7 @@ fn fan_out(
     from: &Box,
     edges: &[&Edge],
     boxes: &[Box],
+    parents: &[usize],
     reversed: bool,
     calc: &WidthCalc,
 ) {
@@ -883,15 +943,13 @@ fn fan_out(
             grid.put(tx, bottom.saturating_sub(1), '▼', calc);
         }
         if let Some(label) = &edge.label {
-            // Above the bus, on the far side of the child's column from the
-            // parent. The parent's connector runs down this same row, and a
-            // label written straight across it erased the line it belongs to.
-            let x = if tx > fx {
-                tx + 1
-            } else {
-                fx.saturating_sub(calc.str(label) + 1)
-            };
-            grid.text(x, mid.saturating_sub(1), label, calc);
+            // Above the bus, outside the column this edge has to itself, on the
+            // far side from its other end. The parent's connector runs down
+            // this same row, and a label written straight across it erased the
+            // line it belongs to.
+            let shared = parents[edge.to] > 1 && edges.len() == 1;
+            let start = label_start(fx, tx, calc.str(label), shared);
+            grid.text(start.max(0) as usize, mid.saturating_sub(1), label, calc);
         }
     }
 }
@@ -900,8 +958,7 @@ fn connect_right(
     grid: &mut Grid,
     from: &Box,
     to: &Box,
-    label: Option<&str>,
-    widest: usize,
+    label: &EdgeLabel,
     reversed: bool,
     calc: &WidthCalc,
 ) {
@@ -909,32 +966,28 @@ fn connect_right(
     let left = from.right() + 1;
     let right = to.x;
 
-    // The label goes in the line itself, at the end the arrowhead is on — which
-    // in an `RL` chart, whose edges were turned round to lay the ranks out, is
-    // back at the left. That end is the one where each of a node's edges is on
-    // a row of its own; written at the other, everything a node fans out would
-    // land on the one row and overwrite itself.
-    //
-    // So the connector has to turn clear of the *widest* label at this rank
-    // boundary, its own or not, so that everything leaving one box still turns
-    // in one column. The gap between the columns was widened by that much.
-    let straight = left + (right - left) / 2;
-    let mid = if widest == 0 || fy == ty {
-        straight
-    } else if reversed {
-        straight.max(left + widest + 3)
-    } else {
-        straight.min(right.saturating_sub(widest + 4))
-    };
+    // The connector has to turn clear of the labels hanging at either end, and
+    // of the *widest* of them rather than its own, so that everything leaving
+    // one box still turns in one column. The gap was widened by that much.
+    let (hold_left, hold_right) = label.reserved;
+    let mut mid = left + (right - left) / 2;
+    if fy != ty {
+        if hold_left > 0 {
+            mid = mid.max(left + hold_left + 3);
+        }
+        if hold_right > 0 {
+            mid = mid.min(right.saturating_sub(hold_right + 4));
+        }
+    }
     // Written before the lines: a line is drawn only where the canvas is still
     // blank, so it parts around the label rather than erasing it.
-    if let Some(label) = label {
-        let x = if reversed {
-            left + 2
+    if let Some(text) = label.text {
+        let (x, y) = if label.at_left {
+            (left + 2, fy)
         } else {
-            right - calc.str(label) - 2
+            (right - calc.str(text) - 2, ty)
         };
-        grid.text(x, if reversed { fy } else { ty }, label, calc);
+        grid.text(x, y, text, calc);
     }
 
     if fy == ty {
@@ -952,6 +1005,29 @@ fn connect_right(
         grid.put(left, fy, '◀', calc);
     } else {
         grid.put(right.saturating_sub(1), ty, '▶', calc);
+    }
+}
+
+/// An edge's label and which end of the run between two columns it hangs at.
+struct EdgeLabel<'a> {
+    text: Option<&'a str>,
+    at_left: bool,
+    /// The widest label hanging at each end at this rank boundary. The bend
+    /// between them has to clear both.
+    reserved: (usize, usize),
+}
+
+/// Which end of a run a label hangs at.
+///
+/// The arrowhead's end by default, since that is the end where each of the
+/// edges a box fans out arrives on a row of its own. Where several edges arrive
+/// at one box they share that row, and then it is the end they leave from that
+/// tells them apart.
+fn label_at_left(reversed: bool, parents: usize, children: usize) -> bool {
+    if reversed {
+        !(children > 1 && parents == 1)
+    } else {
+        parents > 1 && children == 1
     }
 }
 
@@ -1497,6 +1573,47 @@ mod tests {
                 "{n} parents: {bus:?}"
             );
         }
+    }
+
+    #[test]
+    fn labels_meeting_at_one_node_hang_off_the_column_each_edge_has_to_itself() {
+        // Both were written beside the child they share, so the second landed
+        // on the first and `from a` beside `from b` read `from bm a`. Each is
+        // now beside its own parent, which is what tells the two edges apart.
+        for dir in ["TD", "LR", "RL"] {
+            for n in 1..24 {
+                let (q, z) = ("q".repeat(n), "z".repeat(n));
+                let code =
+                    format!("flowchart {dir}\n A[one] -->|{q}| C[join]\n B[two] -->|{z}| C\n");
+                let joined = rows(&code).join("\n");
+                // Either label surviving whole is the property: written over
+                // each other, whichever went second leaves the first in
+                // pieces — `from a` and `from b` came out as `from bm a`.
+                for label in [&q, &z] {
+                    assert!(joined.contains(label.as_str()), "{dir} lost it:\n{joined}");
+                }
+                for boxed in ["│ one │", "│ two │", "│ join │"] {
+                    assert!(joined.contains(boxed), "{dir}:\n{joined}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_fan_out_keeps_its_labels_beside_the_children() {
+        // The switch is only for the edges that share a child. Where one parent
+        // has them all, the children's columns are what tell the edges apart
+        // and the labels stay where they were.
+        let out = rows("flowchart TD\n A{ok?} -->|yes| B[go]\n A -->|no| C[stop]\n");
+        let row = out
+            .iter()
+            .find(|r| r.contains("yes"))
+            .unwrap_or_else(|| panic!("{}", out.join("\n")));
+        assert!(
+            row.contains("no"),
+            "both beside the bus:\n{}",
+            out.join("\n")
+        );
     }
 
     #[test]
