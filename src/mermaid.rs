@@ -969,12 +969,15 @@ mod sequence {
                 return None;
             }
 
+            // The message text is separated off first. An arrow was looked for
+            // anywhere in the line, so `A->B: use --> this` found the one in
+            // the message, split there, and gave up on the whole diagram.
+            let (participants, text) = line.split_once(':')?;
             let (arrow, dashed) = ["-->>", "->>", "-->", "->", "--x", "-x"]
                 .iter()
-                .find(|a| line.contains(**a))
+                .find(|a| participants.contains(**a))
                 .map(|a| (*a, a.starts_with("--")))?;
-            let (left, rest) = line.split_once(arrow)?;
-            let (right, text) = rest.split_once(':')?;
+            let (left, right) = participants.split_once(arrow)?;
             let from = intern(&mut names, left);
             let to = intern(&mut names, right);
             steps.push(Step::Message {
@@ -1379,6 +1382,16 @@ mod tests {
         let out = rows("sequenceDiagram\n    Alice->>Bob: Hi\n");
         let text = out.join("\n");
         assert!(text.contains("Alice") && text.contains("Bob"));
+    }
+
+    #[test]
+    fn an_arrow_in_a_message_is_part_of_the_message() {
+        let out = rows("sequenceDiagram\n A->B: use --> this\n B-->>A: and A -> B too\n");
+        let text = out.join("\n");
+        assert!(text.contains("use --> this"), "{text}");
+        assert!(text.contains("and A -> B too"), "{text}");
+        // Two participants, not four, and not one called `A->B: use `.
+        assert_eq!(text.matches('┌').count(), 2, "{text}");
     }
 
     #[test]

@@ -829,7 +829,7 @@ that declining beats drawing something subtly wrong.
       it vanishes entirely and the diagram is missing an edge.
 - [ ] A self-edge — `A --> A` — is dropped without a word, rather than drawn or
       declined.
-- [ ] A sequence message whose text contains `-->`, as in `A->B: use --> this`,
+- [x] A sequence message whose text contains `-->`, as in `A->B: use --> this`,
       is split at the arrow inside the text and the whole diagram is declined.
 - [ ] Retiring a placement clears the upload cache by image id without checking
       that the id being deleted is the one cached. Resize the window once and
