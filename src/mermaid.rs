@@ -183,11 +183,14 @@ impl Grid {
             return;
         }
         let here = match self.cells[y][x] {
-            Cell::Char(c) => JUNCTIONS
-                .iter()
-                .find(|(g, _)| *g == c)
-                .map_or(0, |(_, dirs)| *dirs),
-            _ => 0,
+            Cell::Blank => 0,
+            // A label or an arrowhead is not a line and has nothing to say
+            // about where one goes; leave it be, as a plain line does.
+            Cell::Char(c) => match JUNCTIONS.iter().find(|(g, _)| *g == c) {
+                Some((_, dirs)) => *dirs,
+                None => return,
+            },
+            Cell::Skip => return,
         };
         self.put(x, y, junction(dirs | here), calc);
     }
@@ -663,7 +666,10 @@ fn draw_top_down(
                 &mut grid,
                 &boxes[edge.from],
                 &boxes[edge.to],
-                margin + lane_off[nth],
+                Lane {
+                    at: margin + lane_off[nth],
+                    first: margin + content_width + 1,
+                },
                 edge.label.as_deref(),
                 chart.reversed,
                 calc,
@@ -772,7 +778,10 @@ fn draw_left_right(
                 &mut grid,
                 &boxes[edge.from],
                 &boxes[edge.to],
-                lane,
+                Lane {
+                    at: lane,
+                    first: content_height,
+                },
                 edge.label.as_deref(),
                 chart.reversed,
                 calc,
@@ -946,13 +955,22 @@ fn connect_right(
     }
 }
 
+/// Where an edge that skips a rank is routed, and where the lanes start.
+///
+/// A route may only fill blank cells while it is still among the boxes, and has
+/// to join what it finds once it is among the other lanes.
+struct Lane {
+    at: usize,
+    first: usize,
+}
+
 /// Route a left-to-right edge that skips a rank under the boxes between it and
 /// its target, and back up.
 fn route_lane_below(
     grid: &mut Grid,
     from: &Box,
     to: &Box,
-    lane: usize,
+    lane: Lane,
     label: Option<&str>,
     reversed: bool,
     calc: &WidthCalc,
@@ -970,13 +988,27 @@ fn route_lane_below(
         } else {
             hi + 2
         };
-        grid.text(x, lane, label, calc);
+        grid.text(x, lane.at, label, calc);
     }
-    grid.vline(fx, from.bottom() + 1, lane, calc);
-    grid.hline(fx, tx, lane, calc);
-    grid.put(fx, lane, '└', calc);
-    grid.put(tx, lane, '┘', calc);
-    grid.vline(tx, to.bottom() + 1, lane, calc);
+    // Down to the lane and back up. Above the lanes the column runs behind the
+    // boxes of its own rank and may only fill blank cells, but once among them
+    // it crosses the lanes of the other edges that skip a rank, and there it
+    // has to join what it finds: their corners are drawn hard, so the line used
+    // to stop dead at the first one and start again below it.
+    for (x, top) in [(fx, from.bottom() + 1), (tx, to.bottom() + 1)] {
+        for y in top..lane.at {
+            if y < lane.first {
+                grid.put_soft(x, y, '│', calc);
+            } else {
+                grid.join(x, y, UP | DOWN, calc);
+            }
+        }
+    }
+    for x in fx + 1..tx {
+        grid.join(x, lane.at, LEFT | RIGHT, calc);
+    }
+    grid.join(fx, lane.at, UP | RIGHT, calc);
+    grid.join(tx, lane.at, UP | LEFT, calc);
     let (head_x, head_y) = if reversed {
         (fx, from.bottom() + 1)
     } else {
@@ -990,7 +1022,7 @@ fn route_lane(
     grid: &mut Grid,
     from: &Box,
     to: &Box,
-    lane: usize,
+    lane: Lane,
     label: Option<&str>,
     reversed: bool,
     calc: &WidthCalc,
@@ -1001,13 +1033,29 @@ fn route_lane(
     // the boxes of their own rank, and a label written there would sit on top
     // of one. Only the lane column itself is clear all the way down.
     if let Some(label) = label {
-        grid.text(lane + 1, start + (end - start) / 2, label, calc);
+        grid.text(lane.at + 1, start + (end - start) / 2, label, calc);
     }
-    grid.hline(from.right() + 1, lane, start, calc);
-    grid.put(lane, start, '┐', calc);
-    grid.vline(lane, start + 1, end - 1, calc);
-    grid.put(lane, end, '┘', calc);
-    grid.hline(to.right() + 1, lane - 1, end, calc);
+    // Out to the lane and back. The two horizontal ends run behind the boxes of
+    // their own rank and may only fill blank cells there, but where they reach
+    // the lanes they cross the ones belonging to the other edges that skip a
+    // rank, and there they have to join: a lane's corner is drawn hard, so the
+    // run used to stop at the first one it met.
+    for (y, x0) in [(start, from.right() + 1), (end, to.right() + 1)] {
+        for x in x0..lane.at {
+            if x < lane.first {
+                grid.put_soft(x, y, '─', calc);
+            } else {
+                grid.join(x, y, LEFT | RIGHT, calc);
+            }
+        }
+    }
+    // The lane column itself is clear of every box all the way down, so it can
+    // join the whole way and let another edge's run cross it.
+    for y in start + 1..end {
+        grid.join(lane.at, y, UP | DOWN, calc);
+    }
+    grid.join(lane.at, start, LEFT | DOWN, calc);
+    grid.join(lane.at, end, UP | LEFT, calc);
     let (head_x, head_y) = if reversed {
         (from.right() + 1, start)
     } else {
@@ -1449,6 +1497,53 @@ mod tests {
                 "{n} parents: {bus:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_second_lane_leaving_one_box_carries_on_past_the_first() {
+        // Two edges that skip a rank out of the same box each get a lane, and
+        // the second has to cross the first's corner to reach its own. A corner
+        // is drawn hard and a plain line only fills blank cells, so the second
+        // lane used to stop dead there and start again on the far side.
+        let td = rows("flowchart TD\n A --> B --> C --> D\n A --> C\n A --> D\n");
+        let out = td
+            .iter()
+            .find(|r| r.contains('┬'))
+            .unwrap_or_else(|| panic!("TD:\n{}", td.join("\n")));
+        assert_eq!(out.trim(), "└───┘─┬─┐", "TD:\n{}", td.join("\n"));
+
+        let lr = rows("flowchart LR\n A --> B --> C --> D\n A --> C\n A --> D\n");
+        let out = lr
+            .iter()
+            .find(|r| r.contains('├'))
+            .unwrap_or_else(|| panic!("LR:\n{}", lr.join("\n")));
+        assert_eq!(
+            out.trim(),
+            "├─────────────────────┘          │",
+            "LR:\n{}",
+            lr.join("\n")
+        );
+    }
+
+    #[test]
+    fn one_lane_crossing_another_is_drawn_as_a_crossing() {
+        // Here the lanes belong to different boxes, so one runs across the
+        // other rather than out of the same corner.
+        for dir in ["TD", "LR"] {
+            let code = format!("flowchart {dir}\n A --> B --> C --> D --> E\n A --> C\n B --> D\n");
+            let out = rows(&code);
+            let joined = out.join("\n");
+            assert!(joined.contains('┼'), "{dir}:\n{joined}");
+        }
+    }
+
+    #[test]
+    fn a_lane_never_writes_over_the_label_it_is_carrying() {
+        // `join` reads the cell it is about to draw, and a label is not a line:
+        // it has nothing to say about where one goes and must be left alone.
+        let out = rows("flowchart LR\n A --> B --> C\n A -->|the skip| C\n");
+        let joined = out.join("\n");
+        assert!(joined.contains("the skip"), "{joined}");
     }
 
     #[test]
