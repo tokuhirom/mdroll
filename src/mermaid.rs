@@ -772,18 +772,85 @@ fn draw_left_right(
     }
     let side = |edge: &Edge| label_at_left(chart.reversed, parents[edge.to], children[edge.from]);
 
+    // Rows before columns. Which row a label lands on decides which other
+    // labels it has to share space with, that decides how wide the run between
+    // two columns has to be, and only then is there an x to put a box at.
+    for (r, nodes) in by_rank.iter().enumerate() {
+        let mut y = (content_height - rank_heights[r]) / 2;
+        for &i in nodes {
+            boxes[i] = Box {
+                x: 0,
+                y,
+                w: box_w(i),
+                h: 3,
+            };
+            y += 4;
+        }
+    }
+
     // A label is written into the connector itself, so the space between two
     // columns has to hold it along with the arrowhead and a cell of line on
     // either side — and where labels hang at both ends of the runs, both of
     // them and the bend in between.
+    //
+    // Several edges can land on one row: two parents arriving at one child
+    // share the child's row, and the rule that picks an end cannot separate
+    // them when both parents also have several children. They are set down one
+    // after another along the row instead, and what has to be reserved is the
+    // whole row rather than its widest single label.
+    let mut offset = vec![0usize; chart.edges.len()];
+    let mut hangs_left = vec![false; chart.edges.len()];
     let mut widest = vec![(0usize, 0usize); by_rank.len()];
-    for edge in &chart.edges {
+    let mut rows: Vec<(usize, usize, bool, usize)> = Vec::new();
+    for (i, edge) in chart.edges.iter().enumerate() {
         let Some(label) = &edge.label else { continue };
-        if rank[edge.to] == rank[edge.from] + 1 {
-            let end = &mut widest[rank[edge.from]];
-            let w = if side(edge) { &mut end.0 } else { &mut end.1 };
-            *w = (*w).max(calc.str(label));
+        if rank[edge.to] != rank[edge.from] + 1 {
+            continue;
         }
+        let band = rank[edge.from];
+        let width = calc.str(label);
+        let row_at = |at_left: bool| {
+            if at_left {
+                boxes[edge.from].center_y()
+            } else {
+                boxes[edge.to].center_y()
+            }
+        };
+        let occupied = |rows: &Vec<(usize, usize, bool, usize)>, at_left: bool| {
+            rows.iter()
+                .any(|(b, r, l, _)| *b == band && *r == row_at(at_left) && *l == at_left)
+        };
+        // The end the rule picks, and failing that the other one. Both ends can
+        // be taken — every row of the boundary carries two edges when two
+        // parents each have two children — and only then do labels share a row,
+        // which is the case the offset is for.
+        let preferred = side(edge);
+        let at_left = if occupied(&rows, preferred) && !occupied(&rows, !preferred) {
+            !preferred
+        } else {
+            preferred
+        };
+        hangs_left[i] = at_left;
+
+        let row = row_at(at_left);
+        let taken = match rows
+            .iter_mut()
+            .find(|(b, r, l, _)| *b == band && *r == row && *l == at_left)
+        {
+            Some((_, _, _, taken)) => {
+                let at = *taken;
+                *taken += width + 1;
+                at
+            }
+            None => {
+                rows.push((band, row, at_left, width + 1));
+                0
+            }
+        };
+        offset[i] = taken;
+        let end = &mut widest[band];
+        let w = if at_left { &mut end.0 } else { &mut end.1 };
+        *w = (*w).max(taken + width);
     }
     let gap: Vec<usize> = widest
         .iter()
@@ -800,15 +867,8 @@ fn draw_left_right(
 
     let mut x = 0usize;
     for (r, nodes) in by_rank.iter().enumerate() {
-        let mut y = (content_height - rank_heights[r]) / 2;
         for &i in nodes {
-            boxes[i] = Box {
-                x,
-                y,
-                w: box_w(i),
-                h: 3,
-            };
-            y += 4;
+            boxes[i].x = x;
         }
         x += column_width[r] + gap[r];
     }
@@ -835,7 +895,8 @@ fn draw_left_right(
                 &boxes[edge.to],
                 &EdgeLabel {
                     text: edge.label.as_deref(),
-                    at_left: side(edge),
+                    at_left: hangs_left[i],
+                    offset: offset[i],
                     reserved: widest[rank[edge.from]],
                 },
                 chart.reversed,
@@ -1074,10 +1135,19 @@ fn connect_right(
     // Written before the lines: a line is drawn only where the canvas is still
     // blank, so it parts around the label rather than erasing it.
     if let Some(text) = label.text {
+        // Along the row from whichever end this label hangs at, past any that
+        // are already there. Two edges arriving at one box share its row, and
+        // written at the same place the second is drawn over the first: the
+        // label that survived read as though it belonged to the other edge.
         let (x, y) = if label.at_left {
-            (left + 2, fy)
+            (left + 2 + label.offset, fy)
         } else {
-            (right - calc.str(text) - 2, ty)
+            (
+                right
+                    .saturating_sub(calc.str(text) + 2 + label.offset)
+                    .max(left + 1),
+                ty,
+            )
         };
         grid.text(x, y, text, calc);
     }
@@ -1104,7 +1174,10 @@ fn connect_right(
 struct EdgeLabel<'a> {
     text: Option<&'a str>,
     at_left: bool,
-    /// The widest label hanging at each end at this rank boundary. The bend
+    /// Columns already spoken for by labels sharing this one's row, measured
+    /// from the end it hangs at. Zero for a row with one label on it.
+    offset: usize,
+    /// The widest row of labels at each end of this rank boundary. The bend
     /// between them has to clear both.
     reserved: (usize, usize),
 }
@@ -1808,6 +1881,50 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn four_sideways_labels_between_two_parents_and_two_children_all_survive() {
+        // The `LR` version of the same collision, and it was the worse one: two
+        // labels were lost outright and the two that survived sat on a row
+        // belonging to an edge that was not theirs, so `A ──from b──▶ C` said
+        // the label of `B --> C` about the edge from `A`.
+        for dir in ["LR", "RL"] {
+            for n in 1..12 {
+                let labels: Vec<String> = ["fa", "td", "fb", "t2"]
+                    .iter()
+                    .map(|s| format!("{s}{}", "q".repeat(n)))
+                    .collect();
+                let code = format!(
+                    "flowchart {dir}\n A -->|{}| C\n A -->|{}| D\n B -->|{}| C\n B -->|{}| D\n",
+                    labels[0], labels[1], labels[2], labels[3]
+                );
+                let out = rows(&code);
+                let joined = out.join("\n");
+                for label in &labels {
+                    assert!(
+                        joined.contains(label.as_str()),
+                        "{dir} lost {label} at width {n}:\n{joined}"
+                    );
+                }
+                // And none of them was written over a box.
+                for node in ["A", "B", "C", "D"] {
+                    assert!(
+                        joined.contains(&format!("│ {node} │")),
+                        "{dir} lost box {node}:\n{joined}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_run_with_one_label_on_each_row_is_no_wider_than_it_was() {
+        // Sharing a row is what costs width, and a diagram whose labels each
+        // have a row to themselves must not pay for it.
+        let out = rows("flowchart LR\n A[start] -->|yes| B[next]\n A -->|no| C[other]\n");
+        let widest = out.iter().map(|r| r.chars().count()).max().unwrap();
+        assert_eq!(widest, 26, "{}", out.join("\n"));
     }
 
     #[test]
