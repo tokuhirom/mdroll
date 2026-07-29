@@ -565,7 +565,20 @@ fn draw_top_down(
     for b in &mut boxes {
         b.x += margin;
     }
-    let width = margin + (content_width + long_edges.len() * 2 + 2).max(extent + 1);
+
+    // A lane is a vertical run, which no label can be written along, so the
+    // label hangs beside it and the next lane starts past the far end of it.
+    let mut lane_off = Vec::with_capacity(long_edges.len());
+    let mut lane_x = content_width + 1;
+    for &i in &long_edges {
+        lane_off.push(lane_x);
+        lane_x += 2 + chart.edges[i]
+            .label
+            .as_deref()
+            .map_or(0, |l| calc.str(l) + 1);
+    }
+
+    let width = margin + (lane_x + 1).max(extent + 1);
     let mut grid = Grid::new(width, height);
 
     for (i, node) in chart.nodes.iter().enumerate() {
@@ -593,15 +606,13 @@ fn draw_top_down(
     }
     for (i, edge) in chart.edges.iter().enumerate() {
         if rank[edge.to] > rank[edge.from] + 1 {
-            let lane = margin
-                + content_width
-                + 1
-                + long_edges.iter().position(|j| *j == i).unwrap_or(0) * 2;
+            let nth = long_edges.iter().position(|j| *j == i).unwrap_or(0);
             route_lane(
                 &mut grid,
                 &boxes[edge.from],
                 &boxes[edge.to],
-                lane,
+                margin + lane_off[nth],
+                edge.label.as_deref(),
                 chart.reversed,
                 calc,
             );
@@ -626,7 +637,6 @@ fn draw_left_right(
         .map(|nodes| nodes.len() * 3 + nodes.len().saturating_sub(1))
         .collect();
     let content_height = rank_heights.iter().copied().max().unwrap_or(3);
-    let width: usize = column_width.iter().sum::<usize>() + BAND * 2 * by_rank.len() + 2;
 
     // An edge that skips a rank gets a lane below every box, the way the
     // top-down layout gives one a lane to the right. Drawn straight it would
@@ -651,6 +661,19 @@ fn draw_left_right(
         })
         .collect();
 
+    // A label is written into the connector itself, at the end that arrives at
+    // the target, so the space between two columns has to hold the label, the
+    // arrowhead, and a cell of line on either side of them.
+    let mut widest = vec![0usize; by_rank.len()];
+    for edge in &chart.edges {
+        let Some(label) = &edge.label else { continue };
+        if rank[edge.to] == rank[edge.from] + 1 {
+            let r = rank[edge.from];
+            widest[r] = widest[r].max(calc.str(label));
+        }
+    }
+    let gap: Vec<usize> = widest.iter().map(|w| (w + 5).max(BAND * 2)).collect();
+
     let mut x = 0usize;
     for (r, nodes) in by_rank.iter().enumerate() {
         let mut y = (content_height - rank_heights[r]) / 2;
@@ -663,7 +686,17 @@ fn draw_left_right(
             };
             y += 4;
         }
-        x += column_width[r] + BAND * 2;
+        x += column_width[r] + gap[r];
+    }
+    // A lane label that outgrows the run it sits in is written past the far
+    // corner instead, which can reach beyond the last column. Reserving for it
+    // costs nothing: a row is trimmed of trailing blanks on its way out.
+    let mut width = x + 2;
+    for &i in &long_edges {
+        let e = &chart.edges[i];
+        let Some(label) = &e.label else { continue };
+        let hi = boxes[e.from].center_x().max(boxes[e.to].center_x());
+        width = width.max(hi + calc.str(label) + 3);
     }
 
     let mut grid = Grid::new(width, height);
@@ -676,6 +709,8 @@ fn draw_left_right(
                 &mut grid,
                 &boxes[edge.from],
                 &boxes[edge.to],
+                edge.label.as_deref(),
+                widest[rank[edge.from]],
                 chart.reversed,
                 calc,
             );
@@ -686,6 +721,7 @@ fn draw_left_right(
                 &boxes[edge.from],
                 &boxes[edge.to],
                 lane,
+                edge.label.as_deref(),
                 chart.reversed,
                 calc,
             );
@@ -805,11 +841,46 @@ fn fan_out(
     }
 }
 
-fn connect_right(grid: &mut Grid, from: &Box, to: &Box, reversed: bool, calc: &WidthCalc) {
+fn connect_right(
+    grid: &mut Grid,
+    from: &Box,
+    to: &Box,
+    label: Option<&str>,
+    widest: usize,
+    reversed: bool,
+    calc: &WidthCalc,
+) {
     let (fy, ty) = (from.center_y(), to.center_y());
     let left = from.right() + 1;
     let right = to.x;
-    let mid = left + (right - left) / 2;
+
+    // The label goes in the line itself, at the end the arrowhead is on — which
+    // in an `RL` chart, whose edges were turned round to lay the ranks out, is
+    // back at the left. That end is the one where each of a node's edges is on
+    // a row of its own; written at the other, everything a node fans out would
+    // land on the one row and overwrite itself.
+    //
+    // So the connector has to turn clear of the *widest* label at this rank
+    // boundary, its own or not, so that everything leaving one box still turns
+    // in one column. The gap between the columns was widened by that much.
+    let straight = left + (right - left) / 2;
+    let mid = if widest == 0 || fy == ty {
+        straight
+    } else if reversed {
+        straight.max(left + widest + 3)
+    } else {
+        straight.min(right.saturating_sub(widest + 4))
+    };
+    // Written before the lines: a line is drawn only where the canvas is still
+    // blank, so it parts around the label rather than erasing it.
+    if let Some(label) = label {
+        let x = if reversed {
+            left + 2
+        } else {
+            right - calc.str(label) - 2
+        };
+        grid.text(x, if reversed { fy } else { ty }, label, calc);
+    }
 
     if fy == ty {
         grid.hline(left, right - 1, fy, calc);
@@ -836,10 +907,25 @@ fn route_lane_below(
     from: &Box,
     to: &Box,
     lane: usize,
+    label: Option<&str>,
     reversed: bool,
     calc: &WidthCalc,
 ) {
     let (fx, tx) = (from.center_x(), to.center_x());
+    // The lane is clear of every box, so the label can sit in the line itself,
+    // centred on the run that spans the ranks the edge skips — but past the far
+    // corner when the run is too short for it, since a corner is drawn hard and
+    // would cut the label in half.
+    if let Some(label) = label {
+        let (lo, hi) = (fx.min(tx), fx.max(tx));
+        let w = calc.str(label);
+        let x = if w + 2 <= hi - lo {
+            lo + (hi - lo - w) / 2
+        } else {
+            hi + 2
+        };
+        grid.text(x, lane, label, calc);
+    }
     grid.vline(fx, from.bottom() + 1, lane, calc);
     grid.hline(fx, tx, lane, calc);
     grid.put(fx, lane, '└', calc);
@@ -859,11 +945,18 @@ fn route_lane(
     from: &Box,
     to: &Box,
     lane: usize,
+    label: Option<&str>,
     reversed: bool,
     calc: &WidthCalc,
 ) {
     let start = from.bottom();
     let end = to.center_y();
+    // Beside the lane, not in it: the horizontal ends of this route pass behind
+    // the boxes of their own rank, and a label written there would sit on top
+    // of one. Only the lane column itself is clear all the way down.
+    if let Some(label) = label {
+        grid.text(lane + 1, start + (end - start) / 2, label, calc);
+    }
     grid.hline(from.right() + 1, lane, start, calc);
     grid.put(lane, start, '┐', calc);
     grid.vline(lane, start + 1, end - 1, calc);
@@ -1258,6 +1351,60 @@ mod tests {
             let row = out.iter().find(|r| r.contains(&label)).unwrap();
             assert_eq!(row.matches(&label).count(), 2, "{row:?}");
             assert!(row.contains('│'), "{row:?}");
+        }
+    }
+
+    #[test]
+    fn a_sideways_edge_carries_its_label_to_the_box_it_points_at() {
+        // Labels were drawn only by the fan that hangs a top-down parent's
+        // children off one bus, so `flowchart LR` dropped every one it was
+        // given: `A -->|yes| B` drew no `yes` anywhere.
+        for dir in ["LR", "RL"] {
+            for n in 1..24 {
+                let (q, z) = ("q".repeat(n), "z".repeat(n));
+                let code =
+                    format!("flowchart {dir}\n A[start] -->|{q}| B[next]\n A -->|{z}| C[other]\n");
+                let out = rows(&code);
+                let joined = out.join("\n");
+                let at = |label: &String| {
+                    out.iter()
+                        .position(|r| r.contains(label.as_str()))
+                        .unwrap_or_else(|| panic!("{dir} lost {label}:\n{joined}"))
+                };
+                // Each label goes to the end its own arrowhead is on, which is
+                // the one end where the edges of a fan are on rows of their
+                // own. Written where they leave, they would share a row and
+                // the second would be drawn over the first.
+                assert!(out[at(&q)].contains("next"), "{dir}:\n{joined}");
+                assert!(out[at(&z)].contains("other"), "{dir}:\n{joined}");
+                assert_eq!(joined.matches('▶').count() + joined.matches('◀').count(), 2);
+                assert!(joined.contains("│ start │"), "{dir}:\n{joined}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_edge_that_skips_a_rank_carries_its_label_too() {
+        // The other place with no label: an edge routed out to a lane of its
+        // own, in either direction.
+        for dir in ["TD", "LR"] {
+            for n in 1..40 {
+                let label = "q".repeat(n);
+                let code = format!("flowchart {dir}\n A --> B\n B --> C\n A -->|{label}| C\n");
+                let out = rows(&code);
+                let joined = out.join("\n");
+                assert!(
+                    joined.contains(&label),
+                    "{dir} truncated the label at the canvas edge:\n{joined}"
+                );
+                // Beside the lane, never over a box or over the corner that
+                // turns the lane, both of which are drawn hard.
+                for boxed in ["│ A │", "│ B │", "│ C │"] {
+                    assert!(joined.contains(boxed), "{dir}:\n{joined}");
+                }
+                let heads = joined.matches(['▲', '▼', '◀', '▶']).count();
+                assert_eq!(heads, 3, "one head per edge, {dir}:\n{joined}");
+            }
         }
     }
 
