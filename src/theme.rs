@@ -345,6 +345,60 @@ impl Default for Theme {
     }
 }
 
+/// Every key each section accepts, in the order a dump writes them.
+///
+/// One list, used both to reject what a theme should not contain and to write
+/// out what it may. Keeping them apart would let a key be added to the dump and
+/// then refused by the parser, and the round-trip test would catch it only
+/// because they are the same list.
+const CODE_KEYS: &[&str] = &["syntect_theme", "fence"];
+const HEADING_KEYS: &[&str] = &["h1", "h2", "h3", "h4", "h5", "h6"];
+const INLINE_KEYS: &[&str] = &[
+    "link",
+    "code",
+    "emph",
+    "strong",
+    "strikethrough",
+    "footnote",
+];
+const BLOCK_KEYS: &[&str] = &[
+    "quote_bar",
+    "quote",
+    "rule",
+    "list_marker",
+    "task_done",
+    "task_todo",
+];
+const TABLE_KEYS: &[&str] = &["border", "header"];
+const ALERT_KEYS: &[&str] = &["note", "tip", "important", "warning", "caution"];
+const UI_KEYS: &[&str] = &[
+    "status",
+    "toast",
+    "cursor",
+    "search_match",
+    "search_current",
+    "hint",
+    "dim",
+];
+
+/// Refuse a key the section does not have.
+///
+/// A misspelled section and a misspelled attribute are both refused by
+/// `deny_unknown_fields`; the keys between them are map entries, so without
+/// this an unrecognised one is carried and never looked at. The colour does not
+/// take and nothing says why, which is the worst of the three outcomes.
+fn check_keys<V>(section: &str, map: &BTreeMap<String, V>, known: &[&str]) -> Result<()> {
+    for key in map.keys() {
+        if !known.contains(&key.as_str()) {
+            bail!(
+                "unknown key {key:?} in [{section}]; valid keys: {}",
+                known.join(", ")
+            );
+        }
+    }
+    Ok(())
+}
+
 fn take(map: &BTreeMap<String, StyleSpec>, key: &str, fallback: Style) -> Result<Style> {
     match map.get(key) {
         Some(spec) => Ok(fallback.patch(spec.resolve()?)),
@@ -355,6 +409,14 @@ fn take(map: &BTreeMap<String, StyleSpec>, key: &str, fallback: Style) -> Result
 impl Theme {
     pub fn parse(text: &str) -> Result<Theme> {
         let file: ThemeFile = toml::from_str(text).context("theme is not valid TOML")?;
+        check_keys("code", &file.code, CODE_KEYS)?;
+        check_keys("heading", &file.heading, HEADING_KEYS)?;
+        check_keys("inline", &file.inline, INLINE_KEYS)?;
+        check_keys("block", &file.block, BLOCK_KEYS)?;
+        check_keys("table", &file.table, TABLE_KEYS)?;
+        check_keys("alert", &file.alert, ALERT_KEYS)?;
+        check_keys("ui", &file.ui, UI_KEYS)?;
+
         let mut t = Theme::default();
         if let Some(name) = file.name {
             t.name = name;
@@ -754,29 +816,62 @@ mod tests {
     }
 
     #[test]
-    fn a_dump_names_every_key_the_parser_reads() {
-        // A theme left entirely at its defaults still documents the whole
-        // schema, which is the point of dumping one to start from.
+    fn a_dump_writes_exactly_the_keys_the_parser_accepts() {
+        // Ties the dump to the lists the parser validates against, in both
+        // directions: a key the dump forgets leaves a setting undocumented,
+        // and one it invents is now refused when the dump is read back.
         let dumped = dump(&Theme::default());
-        for key in [
-            "syntect_theme",
-            "fence",
-            "h1",
-            "h6",
-            "link",
-            "footnote",
-            "quote_bar",
-            "rule",
-            "task_todo",
-            "border",
-            "header",
-            "note",
-            "caution",
-            "status",
-            "search_current",
-            "dim",
+        let value: toml::Value = toml::from_str(&dumped).expect("a dump must be valid TOML");
+        for (section, known) in [
+            ("code", CODE_KEYS),
+            ("heading", HEADING_KEYS),
+            ("inline", INLINE_KEYS),
+            ("block", BLOCK_KEYS),
+            ("table", TABLE_KEYS),
+            ("alert", ALERT_KEYS),
+            ("ui", UI_KEYS),
         ] {
-            assert!(dumped.contains(key), "{key} missing from a dumped theme");
+            let table = value
+                .get(section)
+                .and_then(|v| v.as_table())
+                .unwrap_or_else(|| panic!("a dump has no [{section}]"));
+            let mut written: Vec<&str> = table.keys().map(|k| k.as_str()).collect();
+            let mut expected: Vec<&str> = known.to_vec();
+            written.sort_unstable();
+            expected.sort_unstable();
+            assert_eq!(written, expected, "[{section}] differs from its key list");
+        }
+    }
+
+    #[test]
+    fn an_unknown_key_in_a_section_is_refused_rather_than_carried() {
+        // A misspelled section and a misspelled attribute were already refused;
+        // the key between them was accepted in silence, and the only symptom
+        // was a colour that did not take.
+        let err = Theme::parse(
+            r##"
+            name = "t"
+            [inline]
+            lnik = { fg = "#ff0000" }
+            "##,
+        )
+        .unwrap_err();
+        let text = format!("{err:#}");
+        assert!(text.contains("lnik"), "{text}");
+        assert!(text.contains("[inline]"), "{text}");
+        // The message names the alternatives, the way an unknown theme name
+        // lists the themes there are.
+        assert!(text.contains("link"), "{text}");
+    }
+
+    #[test]
+    fn every_section_refuses_a_key_it_does_not_have() {
+        for section in ["code", "heading", "inline", "block", "table", "alert", "ui"] {
+            let text = format!("name = \"t\"\n[{section}]\nnonsense = {{ }}\n");
+            let err = Theme::parse(&text)
+                .err()
+                .unwrap_or_else(|| panic!("[{section}] accepted a key it does not have"));
+            assert!(format!("{err:#}").contains("nonsense"));
         }
     }
 

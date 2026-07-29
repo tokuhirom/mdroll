@@ -716,10 +716,15 @@ than replacing it, so writing `bold = false` against a key that defaults to bold
 does nothing. Nothing in a theme can turn an attribute off, which is why a dump
 writes only the ones that are set.
 
-A misspelled *section* (`[inlnie]`) and a misspelled *attribute*
-(`{ blod = true }`) are both errors. A misspelled key *within* a section
-(`lnik = { … }`) is not: the sections are maps, so an unrecognised entry is
-carried and never looked at. That one is a defect and is listed as such below.
+A misspelled section (`[inlnie]`), a misspelled key (`lnik = { … }`) and a
+misspelled attribute (`{ blod = true }`) are all errors, and the message for a
+key names the ones that section does have:
+
+```console
+$ mdroll --theme ./mine.toml README.md
+mdroll: in ./mine.toml: unknown key "lnik" in [inline]; valid keys: link, code,
+emph, strong, strikethrough, footnote
+```
 
 Truecolor is assumed; 256-color terminals get a nearest-color downgrade.
 
@@ -992,7 +997,7 @@ a heading beyond its colour.
 - [x] The Themes section names a handful of keys by example and leaves the rest
       to be guessed at. It should say how a theme is written, where it goes, and
       what is derived when a key is absent.
-- [ ] A misspelled key inside a theme section is carried and never looked at.
+- [x] A misspelled key inside a theme section is carried and never looked at.
       `[inline]` and `{ blod = true }` are both `deny_unknown_fields` and say
       so, but the keys between them are map entries, so `lnik = { … }` is
       accepted in silence and the link stays unstyled. Being told beats
