@@ -225,7 +225,12 @@ impl<'a> Parser<'a> {
             let name = self.read_name();
             if name.is_empty() {
                 // Something unparseable; step over it rather than spinning.
-                self.pos += 1;
+                // A whole character of it: half of one leaves every later
+                // slice of the source pointing inside a character.
+                self.pos += self.src[self.pos..]
+                    .chars()
+                    .next()
+                    .map_or(1, char::len_utf8);
                 continue;
             }
             self.skip_whitespace();
@@ -512,6 +517,16 @@ mod tests {
             })
             .expect("the link survived");
         assert_eq!(link.attr("href"), Some("https://example.com/actions"));
+    }
+
+    #[test]
+    fn a_multi_byte_character_where_an_attribute_belongs_is_stepped_over() {
+        // `<b` reads as a tag however the sentence goes on, so this arrives
+        // here from ordinary prose as readily as from an attribute nobody
+        // would write.
+        assert_eq!(parse("a<b は c").len(), 2);
+        let nodes = parse(r#"<p 幅="3">text</p>"#);
+        assert_eq!(element(&nodes).text(), "text");
     }
 
     #[test]
