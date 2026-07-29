@@ -28,6 +28,10 @@ pub struct Options {
     pub calc: WidthCalc,
     /// Emit headings as DECDHL double-height lines.
     pub double_height: bool,
+    /// The renderer draws double-height headings as bitmaps, and paints their
+    /// decoration into the picture. Layout draws the text form only for the
+    /// rows that do not become one.
+    pub raster_headings: bool,
     /// Reserve rows for inline images. When false, or when the terminal has no
     /// graphics support, image blocks render as their alt text.
     pub images: bool,
@@ -44,6 +48,7 @@ impl Default for Options {
             margin: 0,
             calc: WidthCalc::default(),
             double_height: false,
+            raster_headings: false,
             images: false,
             cell: CellSize::default(),
         }
@@ -125,14 +130,26 @@ impl<'a> Ctx<'a> {
             }
             BlockKind::Heading(level) => {
                 let level = *level;
+                let scale = self.heading_scale(level);
                 let first = self.lines.len();
-                self.flow(idx, block, self.heading_scale(level));
+                // A bar is a gutter, the same as the one down the side of a
+                // blockquote: it is drawn on every row of the block and the
+                // column it takes comes out of the content width. Letting the
+                // existing machinery do it is why nothing here measures.
+                match self.heading_bar(level, scale) {
+                    Some(bar) => {
+                        let mut with_bar = block.clone();
+                        with_bar.gutter.push(bar);
+                        self.flow(idx, &with_bar, scale);
+                    }
+                    None => self.flow(idx, block, scale),
+                }
                 // A heading that wraps produces several rows, and every one of
-                // them is part of the heading; the decoration decides for
-                // itself which of them it applies to.
+                // them is part of the heading.
                 for line in &mut self.lines[first..] {
                     line.heading = Some(level);
                 }
+                self.heading_border(idx, block, level, scale);
             }
             _ => self.flow(idx, block, Scale::Normal),
         }
@@ -144,6 +161,65 @@ impl<'a> Ctx<'a> {
         } else {
             Scale::Normal
         }
+    }
+
+    /// Whether this heading's decoration is the renderer's to draw.
+    ///
+    /// A rasterized heading gets its rule and its bar painted into the bitmap,
+    /// where they cost no rows and no columns because the text only uses 0.78
+    /// of the two rows already reserved. Drawing them here as well would double
+    /// them, so the text form is for the rows that do not become a picture:
+    /// every level below the cutoff, every terminal without graphics, and
+    /// everything at all when `-z` is given.
+    fn drawn_as_bitmap(&self, scale: Scale) -> bool {
+        self.opts.raster_headings && scale == Scale::DoubleHeight
+    }
+
+    /// The style a decoration is drawn in.
+    ///
+    /// Without a colour of its own it takes the heading's, dimmed — the
+    /// terminal's own dim attribute here, where the bitmap scales the channels.
+    /// Both mean the same thing and neither needs to know the background, which
+    /// the `terminal` theme does not have.
+    fn decoration_style(&self, decor: crate::theme::Decoration, level: u8) -> Style {
+        match decor.color {
+            Some(color) => Style::fg(color),
+            None => Style {
+                fg: self.theme.heading(level).fg,
+                dim: true,
+                ..Style::PLAIN
+            },
+        }
+    }
+
+    fn heading_bar(&self, level: u8, scale: Scale) -> Option<Span> {
+        if self.drawn_as_bitmap(scale) {
+            return None;
+        }
+        let decor = self.theme.heading_bar[(level.clamp(1, 6) - 1) as usize]?;
+        Some(Span::new("▌", self.decoration_style(decor, level)))
+    }
+
+    /// A rule under the heading, on a row of its own.
+    ///
+    /// This is the one decoration that costs something the bitmap form does
+    /// not: a row. There is nowhere else to put it — the text of a heading
+    /// drawn as text fills its row from top to bottom, and a terminal has no
+    /// way to underscore it with anything thinner than a character.
+    fn heading_border(&mut self, idx: usize, block: &Block, level: u8, scale: Scale) {
+        if self.drawn_as_bitmap(scale) {
+            return;
+        }
+        let Some(decor) = self.theme.heading_border[(level.clamp(1, 6) - 1) as usize] else {
+            return;
+        };
+        let width = self.content_width(block, Scale::Normal);
+        let mut spans = self.lead_spans(block, false);
+        spans.push(Span::new(
+            "─".repeat(width),
+            self.decoration_style(decor, level),
+        ));
+        self.push(Line::new(block.source_range.start, idx, spans));
     }
 
     /// Columns available to a block's content, after indent, gutter and marker.
@@ -919,7 +995,9 @@ mod tests {
 
     #[test]
     fn blocks_are_separated_by_a_blank_line_but_never_lead_with_one() {
-        let out = wrapped("# Title\n\nBody text.\n", 40);
+        // Level 3, so the rule the first two levels carry does not turn up
+        // between the heading and the blank this is about.
+        let out = wrapped("### Title\n\nBody text.\n", 40);
         assert_eq!(out, vec!["Title", "", "Body text."]);
     }
 
@@ -1063,11 +1141,15 @@ mod tests {
             },
             &theme,
         );
-        assert!(lines.iter().all(|l| l.scale == Scale::DoubleHeight));
+        // The rule under the heading is a normal row of its own and is not
+        // part of what is measured here.
+        let heading: Vec<&Line> = lines.iter().filter(|l| l.heading.is_some()).collect();
+        assert!(!heading.is_empty());
+        assert!(heading.iter().all(|l| l.scale == Scale::DoubleHeight));
         let calc = WidthCalc::default();
         assert!(
-            lines.iter().all(|l| calc.str(&l.text()) <= 12),
-            "{lines:#?}"
+            heading.iter().all(|l| calc.str(&l.text()) <= 12),
+            "{heading:#?}"
         );
     }
 
@@ -1112,6 +1194,112 @@ mod tests {
         let line = lines.iter().find(|l| !l.is_blank()).unwrap();
         assert_eq!(line.scale, Scale::Normal);
         assert_eq!(line.heading, Some(1));
+    }
+
+    /// A theme that decorates every level, for testing what gets drawn where.
+    fn decorated_theme() -> Theme {
+        Theme::parse(
+            r##"
+            name = "t"
+            [heading]
+            h1 = { fg = "#ff0000", border = true, bar = true }
+            h2 = { border = true, bar = true }
+            h3 = { border = true, bar = true }
+            "##,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_heading_below_the_double_height_cutoff_gets_its_rule_as_a_row_of_its_own() {
+        // The whole point of the text form: h3 could be decorated in a theme
+        // and nothing was ever drawn, because only the levels that become a
+        // bitmap had anywhere to put it.
+        let theme = decorated_theme();
+        let doc = parse("### Sub\n", &theme);
+        let lines = layout(&doc, Viewport::new(40, 24), &Options::default(), &theme);
+        let rule = lines
+            .iter()
+            .find(|l| l.text().contains('─'))
+            .expect("no rule under h3");
+        assert_eq!(rule.scale, Scale::Normal);
+        assert!(
+            lines.iter().any(|l| l.text().contains('▌')),
+            "no bar beside h3"
+        );
+    }
+
+    #[test]
+    fn a_bar_comes_out_of_the_content_width_rather_than_overflowing_the_row() {
+        // The bar is a gutter, so the text has to reflow around it. `content`
+        // is 40 columns; with a bar the heading text gets 39.
+        let theme = decorated_theme();
+        let doc = parse(
+            "### alpha beta gamma delta epsilon zeta eta theta\n",
+            &theme,
+        );
+        let calc = WidthCalc::default();
+        let lines = layout(&doc, Viewport::new(40, 24), &Options::default(), &theme);
+        for line in lines.iter().filter(|l| l.heading.is_some()) {
+            assert!(
+                calc.str(&line.text()) <= 40,
+                "{:?} is {} columns wide",
+                line.text(),
+                calc.str(&line.text())
+            );
+            assert!(line.text().starts_with('▌'), "{:?}", line.text());
+        }
+    }
+
+    #[test]
+    fn a_rasterized_heading_is_not_decorated_twice() {
+        // kitty paints the rule and the bar into the bitmap, where they cost
+        // nothing. Drawing the text form as well would put a second rule on a
+        // row below the picture.
+        let theme = decorated_theme();
+        let doc = parse("# Title\n", &theme);
+        let lines = layout(
+            &doc,
+            Viewport::new(40, 24),
+            &Options {
+                double_height: true,
+                raster_headings: true,
+                ..Options::default()
+            },
+            &theme,
+        );
+        assert!(
+            !lines.iter().any(|l| l.text().contains('─')),
+            "a rule was drawn under a heading the renderer decorates: {lines:#?}"
+        );
+        assert!(!lines.iter().any(|l| l.text().contains('▌')));
+    }
+
+    #[test]
+    fn turning_big_headings_off_brings_the_decoration_back_as_text() {
+        // -z means no bitmap, so the rule has nowhere to hide and becomes a row
+        // the same as it does below the cutoff.
+        let theme = decorated_theme();
+        let doc = parse("# Title\n", &theme);
+        let lines = layout(
+            &doc,
+            Viewport::new(40, 24),
+            &Options {
+                double_height: false,
+                raster_headings: true,
+                ..Options::default()
+            },
+            &theme,
+        );
+        assert!(lines.iter().any(|l| l.text().contains('─')));
+    }
+
+    #[test]
+    fn a_theme_that_asks_for_nothing_adds_no_rows() {
+        let theme = Theme::parse("name = \"t\"\n[heading]\nh1 = { border = false }\n").unwrap();
+        let doc = parse("# Title\n\nBody.\n", &theme);
+        let lines = layout(&doc, Viewport::new(40, 24), &Options::default(), &theme);
+        assert!(!lines.iter().any(|l| l.text().contains('─')));
     }
 
     #[test]
