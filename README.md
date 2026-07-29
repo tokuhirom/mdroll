@@ -842,7 +842,7 @@ Three more, found while fixing those rather than by reading:
       one bus, which is the only place that has them. A `flowchart LR` drops
       every label it is given — `A -->|yes| B` draws no `yes` anywhere — and so
       does any edge that skips a rank in a `TD` chart.
-- [ ] Where two parents meet at one child, each draws the junction under that
+- [x] Where two parents meet at one child, each draws the junction under that
       child for itself, so the second overwrites the first: `└─────┌────┘`,
       with a corner where the column that carries on downwards wants a `┬`.
 - [ ] Two labelled edges that meet at one node write their labels in the same
