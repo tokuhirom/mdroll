@@ -1230,12 +1230,31 @@ impl App {
             .is_some_and(|(_, at)| at.elapsed() >= TOAST_DURATION)
     }
 
+    /// The key that opens the help, as configured rather than as shipped —
+    /// telling a reader who rebound it to press `H` would be a lie. `None`
+    /// when the help has been left unbound.
+    fn help_key(&self) -> Option<String> {
+        self.keymap.keys_for(Action::Help).into_iter().next()
+    }
+
     /// Contents of the bottom row: the prompt while searching, a toast if one
     /// is live, the status line if it is enabled, and otherwise nothing.
     pub fn bottom_row(&self) -> Vec<Span> {
         if let Mode::Search { query, forward } = &self.mode {
             let sigil = if *forward { '/' } else { '?' };
-            return vec![Span::new(format!("{sigil}{query}"), self.theme.body())];
+            let mut spans = vec![Span::new(format!("{sigil}{query}"), self.theme.body())];
+            // `?` is backward search here, as in a pager, but it is the help
+            // key nearly everywhere else. Someone who pressed it looking for
+            // help is now staring at a prompt that says nothing; tell them
+            // where the help is, until the first character says they meant
+            // to search after all.
+            if !*forward
+                && query.is_empty()
+                && let Some(key) = self.help_key()
+            {
+                spans.push(Span::new(format!("  help: {key}"), self.theme.dim));
+            }
+            return spans;
         }
         if let Mode::LinkPick = self.mode {
             return vec![Span::new(
@@ -2234,6 +2253,35 @@ mod tests {
         a.toast("hi");
         assert!(!a.toast_expired());
         assert_eq!(a.bottom_row().len(), 1);
+    }
+
+    #[test]
+    fn an_empty_backward_search_prompt_says_where_the_help_is() {
+        // `?` is the help key in most things that are not pagers, so the
+        // prompt it opens here has to answer the question that was asked.
+        let mut a = app("body\n");
+        press(&mut a, '?');
+        let text: String = a.bottom_row().iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(text, "?  help: H");
+    }
+
+    #[test]
+    fn the_help_hint_goes_away_once_the_search_has_a_query() {
+        let mut a = app("body\n");
+        press(&mut a, '?');
+        press(&mut a, 'b');
+        let text: String = a.bottom_row().iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(text, "?b", "the hint is for an empty prompt only");
+    }
+
+    #[test]
+    fn the_forward_search_prompt_carries_no_help_hint() {
+        // Nobody presses `/` looking for help, and the prompt is not a place
+        // to advertise from.
+        let mut a = app("body\n");
+        press(&mut a, '/');
+        let text: String = a.bottom_row().iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(text, "/");
     }
 
     #[test]
