@@ -76,6 +76,37 @@ pub fn render(code: &str, calc: &WidthCalc) -> Option<Vec<String>> {
 // A column grid
 // ---------------------------------------------------------------------------
 
+/// The directions a line leaves a cell in, as a set of bits.
+const UP: u8 = 1;
+const DOWN: u8 = 2;
+const LEFT: u8 = 4;
+const RIGHT: u8 = 8;
+
+/// Every box-drawing character the diagrams use, and what it connects.
+const JUNCTIONS: &[(char, u8)] = &[
+    ('│', UP | DOWN),
+    ('─', LEFT | RIGHT),
+    ('┌', DOWN | RIGHT),
+    ('┐', DOWN | LEFT),
+    ('└', UP | RIGHT),
+    ('┘', UP | LEFT),
+    ('├', UP | DOWN | RIGHT),
+    ('┤', UP | DOWN | LEFT),
+    ('┬', DOWN | LEFT | RIGHT),
+    ('┴', UP | LEFT | RIGHT),
+    ('┼', UP | DOWN | LEFT | RIGHT),
+];
+
+/// The character for a set of directions. A line going only one way is drawn as
+/// though it went both, since a stub end is not a character anyone has.
+fn junction(dirs: u8) -> char {
+    match JUNCTIONS.iter().find(|(_, d)| *d == dirs) {
+        Some((c, _)) => *c,
+        None if dirs & (UP | DOWN) != 0 => '│',
+        None => '─',
+    }
+}
+
 /// A canvas addressed in display columns.
 ///
 /// A double-width character occupies its own cell plus a following
@@ -138,6 +169,27 @@ impl Grid {
         for y in y0.min(y1)..=y0.max(y1) {
             self.put_soft(x, y, '│', calc);
         }
+    }
+
+    /// Draw the box-drawing character that continues in `dirs`, keeping the
+    /// directions whatever is already there continues in.
+    ///
+    /// A junction is drawn by each of the lines meeting at it, and each knows
+    /// only its own half: two parents whose buses arrive over one child both
+    /// see a corner, one turning down from the left and one from the right,
+    /// where together they make a `┬`. Whichever drew second used to win.
+    fn join(&mut self, x: usize, y: usize, dirs: u8, calc: &WidthCalc) {
+        if y >= self.cells.len() || x >= self.width {
+            return;
+        }
+        let here = match self.cells[y][x] {
+            Cell::Char(c) => JUNCTIONS
+                .iter()
+                .find(|(g, _)| *g == c)
+                .map_or(0, |(_, dirs)| *dirs),
+            _ => 0,
+        };
+        self.put(x, y, junction(dirs | here), calc);
     }
 
     fn rows(self) -> Vec<String> {
@@ -786,37 +838,31 @@ fn fan_out(
 
     if targets == [fx] {
         grid.vline(fx, top, bottom - 1, calc);
+        // Say so on the bus row even though the line through it needs no
+        // saying: another parent's bus may reach this column, and it can only
+        // draw the junction right if it can see that this line passes through.
+        grid.join(fx, mid, UP | DOWN, calc);
     } else {
         let lo = targets.iter().copied().min().unwrap().min(fx);
         let hi = targets.iter().copied().max().unwrap().max(fx);
         grid.vline(fx, top, mid - 1, calc);
-        grid.hline(lo, hi, mid, calc);
 
+        // The whole bus is stated cell by cell as the directions the line
+        // leaves in, the plain stretches along with the junctions. A column
+        // another parent's bus also runs through then carries both, whichever
+        // of them was drawn first.
+        for x in lo..=hi {
+            let dirs = (if x == fx { UP } else { 0 })
+                | (if targets.contains(&x) { DOWN } else { 0 })
+                | (if x > lo { LEFT } else { 0 })
+                | (if x < hi { RIGHT } else { 0 });
+            grid.join(x, mid, dirs, calc);
+        }
         for &tx in &targets {
-            let glyph = if tx == fx {
-                '┼'
-            } else if tx == lo {
-                '┌'
-            } else if tx == hi {
-                '┐'
-            } else {
-                '┬'
-            };
-            grid.put(tx, mid, glyph, calc);
             if mid < bottom - 1 {
                 grid.vline(tx, mid + 1, bottom - 1, calc);
             }
         }
-        let parent_glyph = if targets.contains(&fx) {
-            '┼'
-        } else if fx == lo {
-            '└'
-        } else if fx == hi {
-            '┘'
-        } else {
-            '┴'
-        };
-        grid.put(fx, mid, parent_glyph, calc);
     }
 
     if reversed {
@@ -1351,6 +1397,57 @@ mod tests {
             let row = out.iter().find(|r| r.contains(&label)).unwrap();
             assert_eq!(row.matches(&label).count(), 2, "{row:?}");
             assert!(row.contains('│'), "{row:?}");
+        }
+    }
+
+    #[test]
+    fn parents_that_meet_at_one_child_share_the_junction_under_it() {
+        // Each parent drew the junction for itself and the second was drawn
+        // over the first, so this came out `└────┌────┘` — a corner turning
+        // away where the column carrying on downwards wants a `┬`.
+        let out = rows("flowchart TD\n A[one] --> C[join]\n B[two] --> C\n");
+        let bus = out
+            .iter()
+            .find(|r| r.contains('┬'))
+            .unwrap_or_else(|| panic!("no junction:\n{}", out.join("\n")));
+        assert_eq!(bus.trim(), "└────┬────┘", "\n{}", out.join("\n"));
+    }
+
+    #[test]
+    fn a_parent_standing_over_the_junction_carries_its_line_through_it() {
+        // B is directly above D, so its connector arrives from above and goes
+        // on down while the buses from A and C come in from either side.
+        let out = rows("flowchart TD\n A --> D\n B --> D\n C --> D\n");
+        let bus = out
+            .iter()
+            .find(|r| r.contains('┼'))
+            .unwrap_or_else(|| panic!("no junction:\n{}", out.join("\n")));
+        assert_eq!(bus.trim(), "└───────┼───────┘", "\n{}", out.join("\n"));
+    }
+
+    #[test]
+    fn a_junction_never_turns_away_from_the_child_below_it() {
+        // Whichever parent draws last, only the two ends of the bus turn: a
+        // `┌` or a `┐` anywhere in between is a line stopping where another
+        // line was meant to carry on.
+        for n in 2..7 {
+            let mut code = String::from("flowchart TD\n");
+            for i in 0..n {
+                code.push_str(&format!(" {} --> Z\n", (b'A' + i) as char));
+            }
+            let out = rows(&code);
+            let bus = out
+                .iter()
+                .find(|r| r.contains('┬') || r.contains('┼'))
+                .unwrap_or_else(|| panic!("{n} parents, no junction:\n{}", out.join("\n")));
+            assert!(
+                !bus.contains('┌') && !bus.contains('┐'),
+                "{n} parents: {bus:?}"
+            );
+            assert!(
+                bus.trim().starts_with('└') && bus.trim().ends_with('┘'),
+                "{n} parents: {bus:?}"
+            );
         }
     }
 
