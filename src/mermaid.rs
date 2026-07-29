@@ -629,8 +629,22 @@ fn draw_left_right(
         .iter()
         .map(|nodes| nodes.len() * 3 + nodes.len().saturating_sub(1))
         .collect();
-    let height = rank_heights.iter().copied().max().unwrap_or(3);
+    let content_height = rank_heights.iter().copied().max().unwrap_or(3);
     let width: usize = column_width.iter().sum::<usize>() + BAND * 2 * by_rank.len() + 2;
+
+    // An edge that skips a rank gets a lane below every box, the way the
+    // top-down layout gives one a lane to the right. Drawn straight it would
+    // run at the boxes in between, and since a connector is only drawn where
+    // the canvas is still blank, it disappeared behind them instead.
+    let long_edges: Vec<usize> = (0..chart.edges.len())
+        .filter(|i| rank[chart.edges[*i].to] > rank[chart.edges[*i].from] + 1)
+        .collect();
+    let lanes = if long_edges.is_empty() {
+        0
+    } else {
+        long_edges.len() + 1
+    };
+    let height = content_height + lanes;
 
     let mut boxes: Vec<Box> = (0..chart.nodes.len())
         .map(|_| Box {
@@ -643,7 +657,7 @@ fn draw_left_right(
 
     let mut x = 0usize;
     for (r, nodes) in by_rank.iter().enumerate() {
-        let mut y = (height - rank_heights[r]) / 2;
+        let mut y = (content_height - rank_heights[r]) / 2;
         for &i in nodes {
             boxes[i] = Box {
                 x,
@@ -660,12 +674,22 @@ fn draw_left_right(
     for (i, node) in chart.nodes.iter().enumerate() {
         draw_box(&mut grid, &boxes[i], &node.label, &node.shape, calc);
     }
-    for edge in &chart.edges {
-        if rank[edge.to] > rank[edge.from] {
+    for (i, edge) in chart.edges.iter().enumerate() {
+        if rank[edge.to] == rank[edge.from] + 1 {
             connect_right(
                 &mut grid,
                 &boxes[edge.from],
                 &boxes[edge.to],
+                chart.reversed,
+                calc,
+            );
+        } else if let Some(nth) = long_edges.iter().position(|j| *j == i) {
+            let lane = content_height + nth + 1;
+            route_lane_below(
+                &mut grid,
+                &boxes[edge.from],
+                &boxes[edge.to],
+                lane,
                 chart.reversed,
                 calc,
             );
@@ -807,6 +831,30 @@ fn connect_right(grid: &mut Grid, from: &Box, to: &Box, reversed: bool, calc: &W
     } else {
         grid.put(right.saturating_sub(1), ty, '▶', calc);
     }
+}
+
+/// Route a left-to-right edge that skips a rank under the boxes between it and
+/// its target, and back up.
+fn route_lane_below(
+    grid: &mut Grid,
+    from: &Box,
+    to: &Box,
+    lane: usize,
+    reversed: bool,
+    calc: &WidthCalc,
+) {
+    let (fx, tx) = (from.center_x(), to.center_x());
+    grid.vline(fx, from.bottom() + 1, lane, calc);
+    grid.hline(fx, tx, lane, calc);
+    grid.put(fx, lane, '└', calc);
+    grid.put(tx, lane, '┘', calc);
+    grid.vline(tx, to.bottom() + 1, lane, calc);
+    let (head_x, head_y) = if reversed {
+        (fx, from.bottom() + 1)
+    } else {
+        (tx, to.bottom() + 1)
+    };
+    grid.put(head_x, head_y, '▲', calc);
 }
 
 /// Route an edge that skips a rank out to its own lane and back.
@@ -1122,6 +1170,31 @@ mod tests {
         let out = rows("flowchart LR\n A[one] --> B[two]\n");
         assert!(out.iter().any(|r| r.contains("one") && r.contains("two")));
         assert!(out.join("\n").contains('▶'));
+    }
+
+    #[test]
+    fn a_left_to_right_edge_that_skips_a_rank_goes_under_the_boxes() {
+        // Drawn straight, this one ran at B — and since a connector is only
+        // drawn where the canvas is blank, it vanished behind it and the
+        // diagram was simply missing an edge.
+        let out = rows("flowchart LR\n A --> B\n B --> C\n A --> C\n");
+        assert_eq!(
+            out.len(),
+            5,
+            "two rows under the boxes:\n{}",
+            out.join("\n")
+        );
+        assert!(out[4].contains('└') && out[4].contains('┘'), "{:?}", out[4]);
+        assert_eq!(
+            out.join("\n").matches('▲').count(),
+            1,
+            "one head, pointing up into C"
+        );
+    }
+
+    #[test]
+    fn a_left_to_right_chart_with_no_long_edge_gains_no_rows() {
+        assert_eq!(rows("flowchart LR\n A --> B\n").len(), 3);
     }
 
     #[test]
