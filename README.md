@@ -989,6 +989,11 @@ And two found while reading the above:
 - [x] The Headings section says `# Heading` is emitted double-height, but
       `heading_scale` does it for every heading up to level 2. `##` is drawn
       large and the document does not say so.
+- [ ] `border` and `bar` are accepted on every heading level and can only be
+      drawn on the two that get a bitmap, because that is the only path with
+      anywhere to put them. `h3 = { bar = true }` parses, resolves, and draws
+      nothing. Either the levels below the cutoff grow a text decoration that
+      costs a row, or the key is refused where it cannot be honoured.
 - [ ] Rasterizing flattens a heading to one string and one colour, taken from
       the first span that has one, so inline styling inside a heading is lost on
       exactly the terminals that get the bitmap. `` # See `config.toml` ``

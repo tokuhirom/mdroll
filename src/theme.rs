@@ -817,21 +817,41 @@ mod tests {
     }
 
     #[test]
-    fn a_theme_that_says_nothing_borders_the_levels_drawn_large() {
-        // The point of deriving rather than enumerating: every theme written
-        // before decoration existed still shows it.
+    fn a_theme_that_says_nothing_borders_the_levels_drawn_large_and_nothing_else() {
+        // The point of deriving rather than enumerating: a theme written
+        // before decoration existed — which is every theme a user already has
+        // — shows a border without being edited, and grows nothing else.
+        let theme = Theme::parse("name = \"t\"\n[heading]\nh1 = { fg = \"#ff0000\" }\n").unwrap();
+        assert_eq!(theme.heading_border[0], Some(Decoration { color: None }));
+        assert_eq!(theme.heading_border[1], Some(Decoration { color: None }));
+        assert_eq!(theme.heading_border[2], None, "h3 was bordered");
+        assert!(
+            theme.heading_bar.iter().all(|b| b.is_none()),
+            "a bar appeared that nobody asked for"
+        );
+    }
+
+    #[test]
+    fn no_bundled_theme_decorates_a_level_that_cannot_show_it() {
+        // Only the levels drawn large get a bitmap, and the bitmap is the only
+        // place decoration can go, so a bundled theme asking for it below the
+        // cutoff would be asking for nothing to happen.
         for (name, text) in BUNDLED {
             let theme = Theme::parse(text).unwrap();
-            assert_eq!(
-                theme.heading_border[0],
-                Some(Decoration { color: None }),
-                "{name} lost h1's border"
-            );
-            assert_eq!(theme.heading_border[2], None, "{name} bordered h3");
-            assert!(
-                theme.heading_bar.iter().all(|b| b.is_none()),
-                "{name} grew a bar nobody asked for"
-            );
+            for level in 2..6 {
+                assert_eq!(
+                    theme.heading_border[level],
+                    None,
+                    "{name} borders h{}, which is not drawn large",
+                    level + 1
+                );
+                assert_eq!(
+                    theme.heading_bar[level],
+                    None,
+                    "{name} bars h{}, which is not drawn large",
+                    level + 1
+                );
+            }
         }
     }
 
