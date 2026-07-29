@@ -23,11 +23,57 @@ pub fn available() -> bool {
 }
 
 /// Minimal `which`, to avoid a dependency for one lookup.
+///
+/// `mmdc` is a Node shim, which on Windows means `mmdc.cmd` and not a bare
+/// `mmdc`, so each of `PATHEXT`'s suffixes is tried as well as the name on its
+/// own. On Unix a candidate only counts if it is executable: a data file that
+/// happens to share the name is not the binary.
 fn which(name: &str) -> Option<PathBuf> {
     let paths = std::env::var_os("PATH")?;
-    std::env::split_paths(&paths)
-        .map(|dir| dir.join(name))
-        .find(|candidate| candidate.is_file())
+    for dir in std::env::split_paths(&paths) {
+        let base = dir.join(name);
+        if is_executable(&base) {
+            return Some(base);
+        }
+        for ext in extensions() {
+            let mut suffixed = base.clone().into_os_string();
+            suffixed.push(&ext);
+            let candidate = PathBuf::from(suffixed);
+            if is_executable(&candidate) {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+/// Suffixes a bare command name may carry. Nothing outside Windows.
+#[cfg(windows)]
+fn extensions() -> Vec<String> {
+    std::env::var("PATHEXT")
+        .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string())
+        .split(';')
+        .filter(|ext| !ext.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+#[cfg(not(windows))]
+fn extensions() -> Vec<String> {
+    Vec::new()
+}
+
+#[cfg(unix)]
+fn is_executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+}
+
+/// Windows decides from the extension, which the search has already matched.
+#[cfg(not(unix))]
+fn is_executable(path: &Path) -> bool {
+    path.is_file()
 }
 
 pub fn cache_dir() -> Option<PathBuf> {
@@ -145,5 +191,20 @@ mod tests {
             assert!(which("sh").is_some());
         }
         assert!(which("mdroll-definitely-not-a-real-binary").is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_that_is_not_executable_is_not_the_binary() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = std::env::temp_dir().join(format!("mdroll-notexec-{}", std::process::id()));
+        std::fs::write(&path, b"#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let readable_only = is_executable(&path);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let runnable = is_executable(&path);
+        let _ = std::fs::remove_file(&path);
+        assert!(!readable_only, "0644 is not something to run");
+        assert!(runnable, "0755 is");
     }
 }

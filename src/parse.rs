@@ -13,19 +13,37 @@ use comrak::nodes::{AlertType, AstNode, ListType, NodeValue, TableAlignment};
 use comrak::{Arena, Options, parse_document};
 use std::ops::Range;
 
-/// comrak options: CommonMark plus the GitHub extensions.
+/// comrak options: what GitHub renders, and nothing else.
+///
+/// The rule is in the README under "What counts as Markdown here": an extension
+/// goes on when GitHub renders that syntax, and stays off when it does not. A
+/// terminal viewer whose job is to show you the file the way GitHub will has no
+/// business inventing syntax on top.
+///
+/// Four of comrak's extensions are deliberately left off, because turning them
+/// on changes what ordinary documents mean:
+///
+/// - `underline` makes `__text__` an underline. GitHub renders it bold, and
+///   this is common enough that the difference is visible everywhere.
+/// - `subscript` overrides the single-tilde case of `strikethrough`, so
+///   `~text~` becomes a subscript. GFM defines strikethrough as one *or two*
+///   tildes, so this is a spec violation and not only a GitHub one.
+/// - `superscript` claims `^text^`, which GitHub leaves as literal text.
+/// - `spoiler` claims `||text||`, which GitHub also leaves as literal text.
+///
+/// Superscript and subscript still work the way they do on GitHub, through the
+/// `<sup>` and `<sub>` tags, which are handled with the rest of the HTML.
 pub fn options<'c>() -> Options<'c> {
     let mut o = Options::default();
+    // GFM proper.
     o.extension.strikethrough = true;
     o.extension.table = true;
     o.extension.autolink = true;
     o.extension.tasklist = true;
+    // Not in the GFM spec, but GitHub renders all of these.
     o.extension.footnotes = true;
     o.extension.alerts = true;
-    o.extension.superscript = true;
-    o.extension.subscript = true;
-    o.extension.underline = true;
-    o.extension.spoiler = true;
+    o.extension.shortcodes = true;
     o.extension.math_dollars = true;
     o.extension.math_code = true;
     o.extension.multiline_block_quotes = true;
@@ -754,7 +772,17 @@ impl<'t> Builder<'t> {
                 out.push(Span::new(code.literal.clone(), style.patch(theme.code)).with_link(link));
             }
             NodeValue::Math(math) => {
-                out.push(Span::new(math.literal.clone(), style.patch(theme.code)).with_link(link));
+                // A terminal cannot typeset, so the LaTeX source is what there
+                // is to show. `$$...$$` keeps the newlines that surrounded it
+                // inside the literal, and those would lay out as a blank row
+                // above and below the formula.
+                let literal = math.literal.trim_matches('\n');
+                out.push(Span::new(literal.to_string(), style.patch(theme.code)).with_link(link));
+            }
+            // `:rocket:` resolved to 🚀. Unresolvable codes never become this
+            // node in the first place, so they stay as the text they were.
+            NodeValue::ShortCode(code) => {
+                out.push(Span::new(code.emoji.clone(), style).with_link(link));
             }
             NodeValue::HtmlInline(html) => self.html_tag(&html, style, link, out),
             NodeValue::SoftBreak => {
@@ -777,28 +805,9 @@ impl<'t> Builder<'t> {
             NodeValue::Strikethrough => {
                 self.children_inline(node, style.patch(theme.strikethrough), link, out);
             }
-            NodeValue::Underline => {
-                let s = style.patch(Style {
-                    underline: true,
-                    ..Style::PLAIN
-                });
-                self.children_inline(node, s, link, out);
-            }
-            NodeValue::SpoileredText => {
-                let s = style.patch(Style {
-                    reverse: true,
-                    ..Style::PLAIN
-                });
-                self.children_inline(node, s, link, out);
-            }
-            NodeValue::Superscript => {
-                out.push(Span::new("^", style.patch(theme.dim)));
-                self.children_inline(node, style, link, out);
-            }
-            NodeValue::Subscript => {
-                out.push(Span::new("_", style.patch(theme.dim)));
-                self.children_inline(node, style, link, out);
-            }
+            // No arms for `Underline`, `SpoileredText`, `Superscript` or
+            // `Subscript`: the extensions that produce them are off, because
+            // GitHub does not render that syntax. See `options`.
             NodeValue::Escaped | NodeValue::Subtext => self.children_inline(node, style, link, out),
             NodeValue::Link(target) => {
                 let id = LinkId(self.doc.links.len());
@@ -1320,6 +1329,44 @@ mod tests {
     fn strikethrough_is_recognised() {
         let d = doc("~~gone~~\n");
         assert!(d.blocks[0].spans.iter().any(|s| s.style.strikethrough));
+    }
+
+    // The four tests below pin the extensions that are deliberately *off*.
+    // Each of them is a comrak extension that would change what an ordinary
+    // GitHub document means; see `options` for the reasoning.
+
+    #[test]
+    fn double_underscores_are_bold_the_way_github_renders_them() {
+        let d = doc("__strong__\n");
+        let span = d.blocks[0]
+            .spans
+            .iter()
+            .find(|s| s.text == "strong")
+            .expect("the emphasised run");
+        assert!(span.style.bold, "GitHub renders __text__ bold");
+        assert!(!span.style.underline, "not an underline");
+    }
+
+    #[test]
+    fn a_single_tilde_is_strikethrough_not_a_subscript() {
+        // GFM defines strikethrough as one *or two* tildes, so enabling
+        // comrak's subscript extension would break the spec, not just GitHub.
+        let d = doc("~gone~\n");
+        assert_eq!(d.blocks[0].text(), "gone", "no subscript marker");
+        assert!(d.blocks[0].spans.iter().any(|s| s.style.strikethrough));
+    }
+
+    #[test]
+    fn carets_and_double_bars_stay_as_written() {
+        // GitHub has no superscript or spoiler syntax, so this is literal text.
+        let d = doc("x^2^ and ||hidden||\n");
+        assert_eq!(d.blocks[0].text(), "x^2^ and ||hidden||");
+    }
+
+    #[test]
+    fn emoji_shortcodes_resolve_and_unknown_ones_do_not() {
+        let d = doc("ship it :rocket: :not_a_real_shortcode:\n");
+        assert_eq!(d.blocks[0].text(), "ship it 🚀 :not_a_real_shortcode:");
     }
 
     #[test]

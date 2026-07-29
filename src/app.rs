@@ -49,6 +49,27 @@ pub struct Match {
     pub end: usize,
 }
 
+/// A link drawn on screen, and where it was drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VisibleLink {
+    /// Row in the layout, not on the screen.
+    pub row: usize,
+    /// Display column the link starts at.
+    pub col: usize,
+    /// Index into [`Document::links`].
+    pub link: usize,
+}
+
+/// A labelled link, waiting for the keystroke that chooses it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Pick {
+    pub label: char,
+    pub row: usize,
+    pub col: usize,
+    /// Index into [`Document::links`].
+    pub link: usize,
+}
+
 pub struct App {
     pub settings: Settings,
     pub theme: Theme,
@@ -80,7 +101,7 @@ pub struct App {
     pub last_query: String,
     pub last_forward: bool,
 
-    pub picks: Vec<(char, usize)>,
+    pub picks: Vec<Pick>,
     pub toast: Option<(String, Instant)>,
     pub placement: Placement,
     pub quit: bool,
@@ -351,7 +372,7 @@ impl App {
     /// generation counter turns over.
     pub fn measure_images(&mut self) {
         self.generation = self.generation.wrapping_add(1);
-        crate::fetch::prepare();
+        crate::cache::prepare();
         let base = self
             .path
             .as_ref()
@@ -485,13 +506,11 @@ impl App {
     }
 
     fn active_doc(&self) -> &Document {
-        if let (true, Some(doc)) = (self.help, &self.help_doc) {
-            return doc;
-        }
-        if let (true, Some(doc)) = (self.toc, &self.toc_doc) {
-            return doc;
-        }
-        &self.doc
+        pick_doc(
+            (self.help, &self.help_doc),
+            (self.toc, &self.toc_doc),
+            &self.doc,
+        )
     }
 
     /// True when the main document is hidden behind help or the contents pane.
@@ -533,6 +552,23 @@ impl App {
             count += 1;
         }
         count.max(1)
+    }
+
+    /// Largest horizontal offset that still leaves content on screen.
+    ///
+    /// Without it, `l` in no-wrap mode walks off the right-hand end of the
+    /// widest line and into empty screens, with nothing to say how far back the
+    /// text is. The widest line is measured rather than remembered, because it
+    /// changes with every relayout and this runs only on a keystroke.
+    pub fn max_hoffset(&self) -> usize {
+        let widest = self
+            .lines
+            .iter()
+            .map(|line| self.calc().str(&line.text()))
+            .max()
+            .unwrap_or(0);
+        // One screenful of the widest line stays visible.
+        widest.saturating_sub(self.screen.viewport().cols as usize)
     }
 
     /// Largest scroll position that still fills the viewport from the bottom.
@@ -872,8 +908,12 @@ impl App {
 
     // ---- links -----------------------------------------------------------
 
-    /// Links currently on screen, paired with the row they were drawn on.
-    pub fn visible_links(&self) -> Vec<(usize, usize)> {
+    /// Links currently on screen, each with the row and column it was drawn at.
+    ///
+    /// The column comes from the link's own hit rectangle. A row of badges is
+    /// several links on one row, and labelling them all at the row's first
+    /// column would stack them in one place.
+    pub fn visible_links(&self) -> Vec<VisibleLink> {
         let rows = self.screen.viewport().rows;
         let end = self.scroll + self.lines_fitting(self.scroll, rows);
         let mut out = Vec::new();
@@ -883,7 +923,11 @@ impl App {
         {
             for hit in &line.hits {
                 if let HitTarget::Link(id) = hit.target {
-                    out.push((self.scroll + i, id.0));
+                    out.push(VisibleLink {
+                        row: self.scroll + i,
+                        col: hit.rect.x as usize,
+                        link: id.0,
+                    });
                 }
             }
         }
@@ -896,29 +940,35 @@ impl App {
             self.toast("no links on screen");
             return;
         }
+        // There are only so many label keys. Saying so is the difference
+        // between a picker that ran out and a picker that missed something.
+        if links.len() > PICK_KEYS.len() {
+            let extra = links.len() - PICK_KEYS.len();
+            self.toast(&format!(
+                "{extra} more link(s) than labels; scroll for them"
+            ));
+        }
         self.picks = links
-            .iter()
+            .into_iter()
             .take(PICK_KEYS.len())
             .enumerate()
-            .map(|(i, (_, id))| (PICK_KEYS[i] as char, *id))
+            .map(|(i, link)| Pick {
+                label: PICK_KEYS[i] as char,
+                row: link.row,
+                col: link.col,
+                link: link.link,
+            })
             .collect();
         self.mode = Mode::LinkPick;
     }
 
     pub fn pick_overlays(&self) -> Vec<Overlay> {
-        let links = self.visible_links();
         self.picks
             .iter()
-            .zip(links.iter())
-            .map(|((label, _), (row, _))| Overlay {
-                line: *row,
-                col: self
-                    .lines
-                    .get(*row)
-                    .and_then(|l| l.hits.first())
-                    .map(|h| h.rect.x as usize)
-                    .unwrap_or(0),
-                text: label.to_string(),
+            .map(|pick| Overlay {
+                line: pick.row,
+                col: pick.col,
+                text: pick.label.to_string(),
                 style: self.theme.hint,
             })
             .collect()
@@ -961,11 +1011,16 @@ impl App {
         if let Some(line) = url.strip_prefix("#line-")
             && let Ok(line) = line.parse::<usize>()
         {
-            self.toc = false;
-            self.help = false;
-            self.cursor = None;
-            self.relayout();
-            self.scroll = row_for_source_line(&self.lines, line).min(self.max_scroll());
+            self.jump_to_source_line(line);
+            return;
+        }
+        // An anchor into this document — `[Terminal support](#terminal-support)`
+        // — is a jump, not something to hand to a web browser.
+        if let Some(anchor) = url.strip_prefix('#') {
+            match self.source_line_of_anchor(anchor) {
+                Some(line) => self.jump_to_source_line(line),
+                None => self.toast(&format!("no heading matches #{anchor}")),
+            }
             return;
         }
         // A relative Markdown path opens in the viewer; anything else is the
@@ -982,6 +1037,42 @@ impl App {
             Some(path) => self.hand_off(&path.display().to_string()),
             None => self.hand_off(url),
         }
+    }
+
+    /// Leave whatever pane is open and put `line` of the file at the top.
+    fn jump_to_source_line(&mut self, line: usize) {
+        self.toc = false;
+        self.help = false;
+        self.cursor = None;
+        self.relayout();
+        self.scroll = row_for_source_line(&self.lines, line).min(self.max_scroll());
+    }
+
+    /// The line a GitHub-style `#anchor` points at.
+    ///
+    /// Headings are slugged the way GitHub slugs them and matched in document
+    /// order, so a repeated heading resolves to the first one — GitHub's
+    /// `-1`, `-2` suffixes for the later ones fall out of the same walk.
+    fn source_line_of_anchor(&self, anchor: &str) -> Option<usize> {
+        let wanted = anchor.to_lowercase();
+        let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for block in &self.doc.blocks {
+            if block.heading_level().is_none() {
+                continue;
+            }
+            let base = slugify(&block.text());
+            let count = seen.entry(base.clone()).or_insert(0);
+            let slug = if *count == 0 {
+                base
+            } else {
+                format!("{base}-{count}")
+            };
+            *count += 1;
+            if slug == wanted {
+                return Some(block.source_range.start);
+            }
+        }
+        None
     }
 
     fn hand_off(&mut self, target: &str) {
@@ -1169,10 +1260,14 @@ impl App {
         };
         // Field-by-field borrows: the image store is taken mutably while the
         // rest of the state is read, so no method call on `self` may be live.
-        let doc = match (self.help, &self.help_doc) {
-            (true, Some(doc)) => doc,
-            _ => &self.doc,
-        };
+        // Hence the free function rather than `active_doc`, which would borrow
+        // all of `self` — but it has to be the *same* choice, or the links
+        // drawn belong to a different document than the lines they sit on.
+        let doc = pick_doc(
+            (self.help, &self.help_doc),
+            (self.toc, &self.toc_doc),
+            &self.doc,
+        );
         let frame = Frame {
             screen: self.screen,
             lines: &self.lines,
@@ -1243,9 +1338,13 @@ impl App {
     fn pick_key(&mut self, key: KeyEvent) {
         self.mode = Mode::Normal;
         if let KeyCode::Char(c) = key.code
-            && let Some((_, id)) = self.picks.iter().find(|(label, _)| *label == c)
+            && let Some(pick) = self.picks.iter().find(|pick| pick.label == c)
         {
-            let url = self.active_doc().links.get(*id).map(|l| l.url.clone());
+            let url = self
+                .active_doc()
+                .links
+                .get(pick.link)
+                .map(|l| l.url.clone());
             if let Some(url) = url {
                 self.open(&url);
             }
@@ -1284,14 +1383,17 @@ impl App {
     }
 
     fn normal_key<W: Write>(&mut self, out: &mut W, key: KeyEvent) -> Result<()> {
-        // Two-key sequences: `y` waits for `c` or `p`.
+        // Two-key sequences: `yy`, `yc`, `yp`. Anything else after `y` was not
+        // meant as a yank, so the sequence is abandoned and the key is handled
+        // as itself rather than swallowed — pressing `y` by accident should
+        // cost nothing.
         if let Some('y') = self.pending {
             self.pending = None;
             match key.code {
                 KeyCode::Char('c') => return self.yank(out, Yank::CodeBody),
                 KeyCode::Char('p') => return self.yank(out, Yank::Path),
                 KeyCode::Char('y') => return self.yank(out, Yank::Source),
-                _ => return Ok(()),
+                _ => {}
             }
         }
 
@@ -1323,7 +1425,7 @@ impl App {
             Action::ScrollLeft => self.hoffset = self.hoffset.saturating_sub(4),
             Action::ScrollRight => {
                 if !self.wrap {
-                    self.hoffset += 4;
+                    self.hoffset = (self.hoffset + 4).min(self.max_hoffset());
                 }
             }
             Action::ResetScroll => self.hoffset = 0,
@@ -1380,6 +1482,50 @@ pub enum Yank {
     CodeBody,
     Path,
     Selection,
+}
+
+/// A heading's anchor, the way GitHub derives one.
+///
+/// GitHub does this in three steps, and the order is what makes the results
+/// surprising: lower-case it, delete everything that is not a word character,
+/// a hyphen, or a space, and only then turn each space into a hyphen.
+///
+/// Deleting punctuation *before* substituting means it leaves its neighbouring
+/// spaces behind, so `v0.9 — Mermaid` becomes `v09--mermaid` with two hyphens
+/// where the dash was. Runs are not collapsed and the ends are not trimmed.
+/// Letters outside ASCII are word characters, so `## 見出し` really does anchor
+/// at `#見出し`.
+pub fn slugify(heading: &str) -> String {
+    let mut out = String::with_capacity(heading.len());
+    for c in heading.chars() {
+        if c == ' ' {
+            out.push('-');
+        } else if c.is_alphanumeric() || c == '-' || c == '_' {
+            out.extend(c.to_lowercase());
+        }
+        // Everything else — punctuation, emoji, symbols, tabs — is dropped.
+    }
+    out
+}
+
+/// Which document is on screen: the help pane, the contents pane, or the file.
+///
+/// A free function taking the fields it needs, because the draw path holds a
+/// mutable borrow of the image store and so cannot call a method on `App`. It
+/// is the single answer to the question, which is the point — laying out one
+/// document and drawing another's links is exactly the bug this prevents.
+fn pick_doc<'a>(
+    help: (bool, &'a Option<Document>),
+    toc: (bool, &'a Option<Document>),
+    doc: &'a Document,
+) -> &'a Document {
+    if let (true, Some(pane)) = help {
+        return pane;
+    }
+    if let (true, Some(pane)) = toc {
+        return pane;
+    }
+    doc
 }
 
 fn is_markdown(path: &Path) -> bool {
@@ -1589,7 +1735,8 @@ mod tests {
 
     #[test]
     fn horizontal_scrolling_only_applies_without_wrap() {
-        let mut a = app("a long line of text\n");
+        // Wider than the 40-column test screen, or there is nowhere to scroll.
+        let mut a = app(&format!("{}\n", "a long line of text ".repeat(6)));
         press(&mut a, 'l');
         assert_eq!(a.hoffset, 0, "wrap mode has nothing to scroll to");
         press(&mut a, 'w');
@@ -1762,7 +1909,125 @@ mod tests {
         press(&mut a, 'F');
         assert_eq!(a.mode, Mode::LinkPick);
         assert_eq!(a.picks.len(), 2);
-        assert_eq!(a.picks[0].0, 'a');
+        assert_eq!(a.picks[0].label, 'a');
+    }
+
+    #[test]
+    fn two_links_on_one_row_are_labelled_at_their_own_columns() {
+        // A badge row is this shape. Labelling both at the row's first column
+        // stacks them, and only the one drawn last can be seen.
+        let mut a = app("[one](https://a.example) and [two](https://b.example)\n");
+        press(&mut a, 'F');
+        let overlays = a.pick_overlays();
+        assert_eq!(overlays.len(), 2);
+        assert_eq!(overlays[0].line, overlays[1].line, "same row");
+        assert_ne!(overlays[0].col, overlays[1].col, "different columns");
+    }
+
+    #[test]
+    fn more_links_than_labels_is_said_out_loud() {
+        let mut doc = String::new();
+        for i in 0..PICK_KEYS.len() + 3 {
+            doc.push_str(&format!("- [link {i}](https://example.com/{i})\n"));
+        }
+        let mut a = app(&doc);
+        // Tall enough that every link is on screen; the picker only ever sees
+        // what is drawn.
+        a.resize(Screen::new(40, PICK_KEYS.len() as u16 + 8));
+        press(&mut a, 'F');
+        assert_eq!(a.picks.len(), PICK_KEYS.len());
+        assert!(
+            a.toast.as_ref().unwrap().0.contains("3 more link"),
+            "the ones past the last label are accounted for"
+        );
+    }
+
+    /// A document with `filler` body lines under each heading, long enough that
+    /// there is somewhere to scroll to.
+    fn sectioned(headings: &[&str], filler: usize) -> String {
+        let mut out = String::new();
+        for heading in headings {
+            out.push_str(&format!("# {heading}\n\n"));
+            for i in 0..filler {
+                out.push_str(&format!("body {i}\n\n"));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn an_anchor_link_jumps_to_its_heading() {
+        let src = sectioned(&["Top", "Terminal support"], 10);
+        let wanted = src.lines().position(|l| l == "# Terminal support").unwrap() + 1;
+        let mut a = app(&src);
+        a.open("#terminal-support");
+        assert_eq!(a.current_source_line(), wanted, "the heading's own line");
+    }
+
+    #[test]
+    fn a_repeated_heading_resolves_the_way_github_numbers_it() {
+        let src = sectioned(&["Notes", "Notes"], 10);
+        let second = src
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| *l == "# Notes")
+            .nth(1)
+            .unwrap()
+            .0
+            + 1;
+        let mut a = app(&src);
+        a.open("#notes-1");
+        assert_eq!(a.current_source_line(), second, "the second one");
+        a.open("#notes");
+        assert_eq!(a.current_source_line(), 1, "back to the first");
+    }
+
+    #[test]
+    fn an_anchor_that_matches_no_heading_says_so() {
+        let mut a = app("# Top\n\ntext\n");
+        a.open("#nowhere");
+        assert!(a.toast.as_ref().unwrap().0.contains("no heading"));
+    }
+
+    #[test]
+    fn github_style_slugs() {
+        assert_eq!(slugify("Terminal support"), "terminal-support");
+        assert_eq!(
+            slugify("What counts as Markdown here"),
+            "what-counts-as-markdown-here"
+        );
+        // Punctuation goes, the words around it stay separated.
+        assert_eq!(slugify("Over ssh, and tmux"), "over-ssh-and-tmux");
+        assert_eq!(slugify("v0.9 — Mermaid"), "v09--mermaid");
+        // Non-ASCII letters are kept, as GitHub keeps them.
+        assert_eq!(slugify("見出し"), "見出し");
+    }
+
+    #[test]
+    fn horizontal_scrolling_stops_at_the_widest_line() {
+        let mut a = app("short\n");
+        a.wrap = false;
+        a.relayout();
+        for _ in 0..50 {
+            a.act(&mut Vec::new(), Action::ScrollRight).unwrap();
+        }
+        assert_eq!(
+            a.hoffset,
+            a.max_hoffset(),
+            "no running off the end into empty screens"
+        );
+    }
+
+    #[test]
+    fn a_key_that_does_not_follow_y_is_still_itself() {
+        // `y` alone is not a yank — `yy` is — so the key after it was meant as
+        // itself and must not be swallowed.
+        let mut a = app("# One\n\nline\n\n# Two\n\nline\n\n# Three\n\nline\n");
+        let before = a.scroll;
+        press(&mut a, 'y');
+        press(&mut a, 'j');
+        assert_eq!(a.scroll, before + 1, "j scrolled");
+        assert!(a.pending.is_none());
     }
 
     #[test]

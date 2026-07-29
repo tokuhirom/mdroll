@@ -9,10 +9,76 @@
 
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+use std::time::{Duration, SystemTime};
+
+/// The subdirectories this module manages.
+const KINDS: &[&str] = &["images", "mermaid"];
+
+/// How long an entry is kept.
+///
+/// A cache hit does not touch the file, so this is time since it was written,
+/// not time since it was last wanted. That is the point: a badge whose image
+/// changes is otherwise pinned to the first version ever fetched, and a week is
+/// short enough that a stale build status corrects itself while still being far
+/// longer than a reading session.
+pub const MAX_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
 /// A named subdirectory of the user's cache directory.
 pub fn dir(kind: &str) -> Option<PathBuf> {
     dirs::cache_dir().map(|d| d.join("mdroll").join(kind))
+}
+
+/// Once-per-run housekeeping: narrow what is already there, and drop what has
+/// expired.
+///
+/// Narrowing has to happen even in a run that caches nothing new, because a
+/// directory left open by an earlier version would otherwise stay open forever.
+/// Neither job creates a directory: a run that never caches anything should not
+/// leave one behind.
+pub fn prepare() {
+    static ONCE: OnceLock<()> = OnceLock::new();
+    ONCE.get_or_init(|| {
+        for kind in KINDS {
+            if dir(kind).is_some_and(|dir| dir.is_dir()) {
+                let _ = make_dir(kind);
+                sweep(kind, MAX_AGE);
+            }
+        }
+    });
+}
+
+/// Delete entries under `kind` last written more than `max_age` ago.
+///
+/// Best-effort throughout. A cache is by definition reconstructible, so a file
+/// that cannot be read or removed — another `mdroll` holding it, a filesystem
+/// with no timestamps — is left where it is rather than reported.
+pub fn sweep(kind: &str, max_age: Duration) {
+    let Some(dir) = dir(kind) else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    let now = SystemTime::now();
+    for entry in entries.flatten() {
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if !metadata.is_file() {
+            continue;
+        }
+        // A clock that has gone backwards since the file was written yields an
+        // error here, which counts as "not old enough" and leaves it alone.
+        let expired = metadata
+            .modified()
+            .ok()
+            .and_then(|written| now.duration_since(written).ok())
+            .is_some_and(|age| age > max_age);
+        if expired {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 /// Create a cache subdirectory, owner-only, and return it.
@@ -97,6 +163,30 @@ mod tests {
         let mode = std::fs::metadata(&path).unwrap().permissions().mode();
         let _ = std::fs::remove_file(&path);
         assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[test]
+    fn sweeping_removes_what_has_expired_and_keeps_what_has_not() {
+        let kind = format!("test-sweep-{}", std::process::id());
+        let Ok(dir) = make_dir(&kind) else {
+            return;
+        };
+        let (fresh, stale) = (dir.join("fresh"), dir.join("stale"));
+        std::fs::write(&fresh, b"x").unwrap();
+        std::fs::write(&stale, b"x").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&stale)
+            .unwrap()
+            .set_modified(SystemTime::now() - MAX_AGE - Duration::from_secs(60))
+            .unwrap();
+
+        sweep(&kind, MAX_AGE);
+
+        let (kept, gone) = (fresh.is_file(), !stale.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(kept, "an entry written recently stays");
+        assert!(gone, "an entry older than the maximum age goes");
     }
 
     #[cfg(unix)]

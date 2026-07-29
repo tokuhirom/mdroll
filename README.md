@@ -42,8 +42,10 @@ gracefully rather than being the design center.
 
 ## Features
 
-- **Full GitHub Flavored Markdown** — tables, task lists, strikethrough,
-  autolinks, footnotes, and `> [!NOTE]` alerts.
+- **Everything GitHub renders** — tables, task lists, strikethrough, autolinks,
+  footnotes, `> [!NOTE]` alerts, `:rocket:` emoji, and definition lists. Not
+  just the five extensions the GFM spec defines, and nothing GitHub does not
+  have — see [What counts as Markdown here](#what-counts-as-markdown-here).
 - **The HTML in your README** — centred logos, badge rows, `<details>`
   sections, `<kbd>` keys, HTML tables and lists, all rendered rather than
   dumped as tags.
@@ -200,7 +202,7 @@ gives you the text exactly as written.
 | --- | --- |
 | `Tab` | Move block cursor forward |
 | `Shift-Tab` | Move block cursor backward |
-| `y` | Yank block as Markdown source |
+| `yy` | Yank block as Markdown source |
 | `Y` | Yank block as rendered plain text |
 | `yc` | Yank code block contents only, without the fences |
 | `V` | Line selection mode — extend with `j`/`k`, confirm with `y` |
@@ -299,6 +301,11 @@ Images behind an `http(s)` URL are fetched on worker threads and cached under
 `~/.cache/mdroll/images`, keyed by URL. The document is drawn immediately with
 alt text where the pictures will go, and each one replaces its text as it
 lands; a second look at the same document is instant and works offline.
+
+Entries are dropped a week after they were written, and fetched again the next
+time they are wanted. Time since *writing*, not since last use: a build badge
+that never expired would show the same state forever, and being a week out of
+date is the failure this is meant to bound.
 
 The cache is a record of which documents have been opened and what they pointed
 at, so on Unix it is kept to its owner: `~/.cache/mdroll` and everything under
@@ -408,6 +415,38 @@ expensive to retrofit.
 **`layout()` is a pure function.** Wrap/no-wrap toggling, source/render
 toggling, and terminal resize are all handled by discarding the layout and
 recomputing it. No incremental state, no invalidation logic, no drift.
+
+### What counts as Markdown here
+
+The rule is **what GitHub renders**, which is not the same as the GFM spec.
+
+The spec covers five extensions — tables, task lists, strikethrough, autolinks,
+and disallowed raw HTML. GitHub renders considerably more than that: `> [!NOTE]`
+alerts, footnotes, `:rocket:` emoji shortcodes, `$...$` math, and YAML front
+matter are all GitHub features that no spec mentions. Since the point of this
+viewer is to show you the file the way GitHub will, the line is drawn at
+GitHub's behaviour rather than at the spec, and those are all on.
+
+The rule cuts the other way too, which matters more. The Markdown parser
+underneath, [comrak](https://github.com/kivikakk/comrak), offers extensions
+GitHub does not have, and four of them are deliberately **off** because turning
+them on changes what an ordinary document means:
+
+| Extension | Syntax | With it on | On GitHub |
+| --- | --- | --- | --- |
+| `underline` | `__text__` | underlined | **bold** |
+| `subscript` | `~text~` | subscript | ~~struck through~~ |
+| `superscript` | `^text^` | superscript | literal `^text^` |
+| `spoiler` | `\|\|text\|\|` | hidden | literal `\|\|text\|\|` |
+
+The first two are the reason this is a rule and not a preference. `__bold__`
+appears in most READMEs, and GFM defines strikethrough as one *or two* tildes —
+so `subscript` does not merely diverge from GitHub, it breaks the spec the
+project claims to implement. Superscript and subscript are still available the
+way they are on GitHub, through `<sup>` and `<sub>`.
+
+Each of the four has a test pinning the GitHub behaviour, so re-enabling one
+fails the suite rather than quietly changing every document.
 
 ### HTML
 
@@ -686,11 +725,49 @@ Key specs are a single character, a name such as `Esc`, `Space`, `Tab`,
 - [x] Release automation, binaries for macOS/Linux/Windows
 - [x] Documentation and man page (`mdroll --man > mdroll.1`)
 
+### v1.1 — GitHub parity
+
+- [x] `:rocket:` emoji shortcodes, with unknown codes left as written
+- [x] Definition lists
+- [x] Math shown as its LaTeX source, since a terminal cannot typeset it
+- [x] comrak extensions GitHub does not have turned off, with tests pinning
+      `__bold__` and single-tilde `~strikethrough~` to GitHub's reading
+
+### v1.2 — Corrections
+
+Known defects, found by reading the code against this document. Each one is
+small on its own; they are collected here so the list is somewhere other than an
+issue tracker nobody reads.
+
+- [x] The contents pane draws its links against the *main* document's link
+      table, because the draw path checks only for the help pane and not for the
+      contents pane the way `active_doc` does. Ctrl-clicking an entry therefore
+      opens an unrelated URL. `o` and `F` take the other path and are correct.
+- [x] Every link-picker label is placed at the column of the *first* link on its
+      row, so a badge row gets its labels stacked in one spot and only the last
+      one drawn is visible. The hit rectangles already carry the right column.
+- [x] Only the first 26 links can be labelled, and the ones past that are not
+      mentioned, which reads as the picker having missed them.
+- [x] `y` on its own does nothing: the yank needs `yy`, and the key after `y` is
+      swallowed. Both this README and the help pane document a bare `y`.
+- [x] In-document anchor links — `[Terminal support](#terminal-support)`, which
+      this file itself uses — are handed to the system opener instead of jumping
+      to the heading. The contents pane already maps `#line-N` this way.
+- [x] Horizontal scrolling has no right-hand bound, so holding `l` in no-wrap
+      mode runs off the end of the content and into empty screens.
+- [x] `mmdc` is never found on Windows, where it is `mmdc.cmd`: the `PATH`
+      search consults neither `PATHEXT` nor the executable bit.
+- [x] Nothing ever expires from `~/.cache/mdroll`, so a badge whose image
+      changes stays pinned to the first version fetched, with no way to refresh
+      it short of deleting the directory by hand.
+- [x] A `$$...$$` block leaves a blank row above and below it.
+
 ### Beyond
 
-- Math via `$...$` and `$$...$$`
-- Definition lists
-- Use as a library, for embedding in other TUIs
+- YAML front matter drawn as a table, the way GitHub shows it, rather than as a
+  code block
+- GitHub's repository autolinks — `#123`, `user/repo#123`, commit SHAs — which
+  need the repository context that `git remote` can supply
 
 ---
 

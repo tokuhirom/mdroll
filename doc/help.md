@@ -34,7 +34,7 @@ Press `H` or `Esc` to close this help.
 | --- | --- |
 | `Tab` | Move the block cursor forward |
 | `Shift-Tab` | Move the block cursor backward |
-| `y` | Yank the block as Markdown source |
+| `yy` | Yank the block as Markdown source |
 | `Y` | Yank the block as rendered plain text |
 | `yc` | Yank code block contents, without the fences |
 | `yp` | Yank the file path |
