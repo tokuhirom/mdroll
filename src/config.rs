@@ -20,6 +20,7 @@ pub struct ConfigFile {
     pub default_mode: Option<String>,
     pub default_wrap: Option<bool>,
     pub width: Option<usize>,
+    pub margin: Option<usize>,
     pub status: Option<bool>,
     pub double_height_headings: Option<bool>,
     pub images: Option<bool>,
@@ -75,6 +76,7 @@ pub struct Settings {
     pub source: bool,
     pub wrap: bool,
     pub width: usize,
+    pub margin: usize,
     pub status: bool,
     pub double_height: bool,
     pub images: bool,
@@ -93,6 +95,7 @@ impl Default for Settings {
             source: false,
             wrap: true,
             width: 0,
+            margin: 2,
             status: false,
             double_height: true,
             images: true,
@@ -124,6 +127,9 @@ impl Settings {
         }
         if let Some(v) = file.width {
             self.width = v;
+        }
+        if let Some(v) = file.margin {
+            self.margin = v;
         }
         if let Some(v) = file.status {
             self.status = v;

@@ -22,6 +22,9 @@ pub struct Options {
     pub source: bool,
     /// Cap on the reflow width. `0` means the full viewport.
     pub max_width: usize,
+    /// Blank columns kept on each side. Text pressed against the left edge of
+    /// a terminal is hard to read, and hard to select with the mouse.
+    pub margin: usize,
     pub calc: WidthCalc,
     /// Emit headings as DECDHL double-height lines.
     pub double_height: bool,
@@ -38,6 +41,7 @@ impl Default for Options {
             wrap: true,
             source: false,
             max_width: 0,
+            margin: 0,
             calc: WidthCalc::default(),
             double_height: false,
             images: false,
@@ -70,7 +74,8 @@ pub fn layout(doc: &Document, view: Viewport, opts: &Options, theme: &Theme) -> 
 }
 
 fn total_width(view: Viewport, opts: &Options) -> usize {
-    let cols = view.cols.max(1) as usize;
+    let cols = (view.cols.max(1) as usize).saturating_sub(opts.margin * 2);
+    let cols = cols.max(4);
     if opts.max_width > 0 {
         cols.min(opts.max_width)
     } else {
@@ -148,6 +153,9 @@ impl<'a> Ctx<'a> {
     /// Indent + gutter + (marker on the first row, padding afterwards).
     fn lead_spans(&self, block: &Block, first: bool) -> Vec<Span> {
         let mut out = Vec::new();
+        if self.opts.margin > 0 {
+            out.push(Span::plain(" ".repeat(self.opts.margin)));
+        }
         if block.indent > 0 {
             out.push(Span::plain(" ".repeat(block.indent)));
         }
@@ -591,13 +599,24 @@ impl<'a> Ctx<'a> {
             }
 
             let spans = vec![Span::new(raw.clone(), style)];
+            let margin = || -> Vec<Span> {
+                if self.opts.margin > 0 {
+                    vec![Span::plain(" ".repeat(self.opts.margin))]
+                } else {
+                    Vec::new()
+                }
+            };
             if self.opts.wrap {
                 let width = self.total.max(4);
                 for (s, e) in wrap_ranges(raw, width, self.calc()) {
-                    self.push(Line::new(source, block, slice_spans(&spans, s, e)));
+                    let mut row = margin();
+                    row.extend(slice_spans(&spans, s, e));
+                    self.push(Line::new(source, block, row));
                 }
             } else {
-                self.push(Line::new(source, block, spans));
+                let mut row = margin();
+                row.extend(spans);
+                self.push(Line::new(source, block, row));
             }
         }
     }
@@ -697,6 +716,51 @@ mod tests {
             },
         );
         assert_eq!(out, vec!["alpha beta gamma delta epsilon"]);
+    }
+
+    #[test]
+    fn a_margin_indents_every_row_and_narrows_the_text() {
+        let out = render(
+            "alpha beta gamma delta epsilon zeta",
+            20,
+            Options {
+                margin: 3,
+                ..Options::default()
+            },
+        );
+        assert!(out.iter().all(|l| l.starts_with("   ")), "{out:#?}");
+        let calc = WidthCalc::default();
+        // Three columns on each side leaves fourteen for the text.
+        assert!(out.iter().all(|l| calc.str(l) <= 17), "{out:#?}");
+        assert!(out.len() > 1);
+    }
+
+    #[test]
+    fn a_margin_applies_in_source_view_too() {
+        let out = render(
+            "# Title\n",
+            40,
+            Options {
+                source: true,
+                wrap: false,
+                margin: 2,
+                ..Options::default()
+            },
+        );
+        assert_eq!(out, vec!["  # Title"]);
+    }
+
+    #[test]
+    fn a_margin_wider_than_the_terminal_still_leaves_room_to_write() {
+        let out = render(
+            "text",
+            8,
+            Options {
+                margin: 20,
+                ..Options::default()
+            },
+        );
+        assert!(!out.is_empty());
     }
 
     #[test]

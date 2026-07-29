@@ -360,6 +360,7 @@ impl App {
             wrap: self.wrap,
             source: self.source_view && !self.overlaid(),
             max_width: self.settings.width,
+            margin: self.settings.margin,
             calc: self.calc(),
             double_height: self.double_height,
             images: self.settings.images && self.graphics.available(),
@@ -687,11 +688,20 @@ impl App {
     /// laid-out rows so it matches what is on screen.
     pub fn cursor_rendered_text(&self) -> Option<String> {
         let idx = self.cursor?;
+        // The margin is a reading aid, not part of the text, so it comes off
+        // again on the way to the clipboard.
+        let margin = " ".repeat(self.settings.margin);
         let text: Vec<String> = self
             .lines
             .iter()
             .filter(|l| l.block == idx)
-            .map(|l| l.text().trim_end().to_string())
+            .map(|l| {
+                let line = l.text();
+                line.strip_prefix(&margin)
+                    .unwrap_or(&line)
+                    .trim_end()
+                    .to_string()
+            })
             .collect();
         (!text.is_empty()).then(|| text.join("\n"))
     }

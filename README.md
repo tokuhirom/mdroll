@@ -60,7 +60,7 @@ gracefully rather than being the design center.
   your terminal's native text selection keeps working.
 - **Bundled themes** — Dracula, Solarized Dark/Light, Nord, Gruvbox, selectable
   from the command line.
-- **Single static binary**, installable with `mise`.
+- **Single binary**, installable with `mise`.
 
 ---
 
@@ -94,9 +94,8 @@ $ cargo build --release
 
 Prebuilt binaries are attached to each
 [release](https://github.com/tokuhirom/mdroll/releases): macOS on Apple
-silicon, Linux on x86-64 and arm64 (statically linked against musl, so there is
-no glibc version to match), and Windows on x86-64. `mise` picks the right one
-for your machine automatically. Intel Macs build from source.
+silicon, Linux on x86-64 and arm64, and Windows on x86-64. `mise` picks the
+right one for your machine automatically. Intel Macs build from source.
 
 ---
 
@@ -122,6 +121,7 @@ on a terminal.
 | `--wrap` / `--no-wrap` | Start in reflow or horizontal-scroll mode. |
 | `--source` | Start in source view instead of rendered view. |
 | `--width <N>` | Cap the reflow width. `0` means full terminal width. |
+| `--margin <N>` | Blank columns to keep on each side. Default `2`. |
 | `--status` / `--no-status` | Show a persistent status line instead of transient toasts. |
 | `--mouse` | Enable mouse capture (needed for image click actions). Off by default. |
 | `--no-images` | Disable inline image rendering. |
@@ -481,6 +481,7 @@ theme = "dracula"
 default_mode = "render"        # "render" | "source"
 default_wrap = true
 width = 100                    # 0 = full terminal width
+margin = 2                     # blank columns on each side
 status = false                 # false = toast, true = persistent line
 double_height_headings = true
 images = true

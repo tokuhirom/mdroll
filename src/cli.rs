@@ -43,6 +43,10 @@ pub struct Cli {
     #[arg(long, value_name = "N")]
     pub width: Option<usize>,
 
+    /// Blank columns to keep on each side. Default 2.
+    #[arg(long, value_name = "N")]
+    pub margin: Option<usize>,
+
     /// Show a persistent status line instead of transient toasts.
     #[arg(long, conflicts_with = "no_status")]
     pub status: bool,

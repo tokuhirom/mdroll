@@ -39,19 +39,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --all-features
 
-  # The release workflow builds for musl; catching a musl-only break here is
-  # much cheaper than catching it on a tag.
-  musl:
-    name: Build for musl
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-unknown-linux-musl
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release --target x86_64-unknown-linux-musl
-
   # The README is the specification, and it is also the thing most likely to
   # crash the renderer, since it exercises every construct.
   render-readme:

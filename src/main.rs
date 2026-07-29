@@ -147,6 +147,9 @@ fn resolve(cli: &Cli) -> Result<Settings> {
     if let Some(width) = cli.width {
         settings.width = width;
     }
+    if let Some(margin) = cli.margin {
+        settings.margin = margin;
+    }
     if cli.status {
         settings.status = true;
     }
