@@ -799,6 +799,43 @@ because the tests used text that happened to avoid the case.
 - [x] A double-height heading scrolls horizontally at the speed of the text
       under it, rather than twice as fast
 
+### v1.5 — HTML, diagrams, and pictures
+
+Defects in `html.rs`, `mermaid.rs`, and `graphics.rs`, found by reading them
+against this document. The first two are crashes on documents nobody would
+think twice about writing; the mermaid ones all break the module's own rule
+that declining beats drawing something subtly wrong.
+
+- [ ] The entity decoder looks for the `;` in the twelve bytes after an `&` by
+      slicing at byte twelve, which panics when a character straddles it.
+      `QuickCheck & 日本語` in an HTML block takes the whole viewer down.
+- [ ] Attribute parsing steps over a byte it cannot make sense of, which lands
+      inside a multi-byte character and panics on the next name it reads. Both
+      `<p 幅="3">` and the text `a<b は c` inside an HTML block reach it.
+- [ ] `flowchart RL` and `BT` reverse every *edge* instead of the layout, so
+      `A --> B` is drawn as an arrow pointing at `A`. The one thing a diagram
+      says is which way its arrows point.
+- [ ] A statement ending in `;`, which mermaid's own documentation writes,
+      makes a second node: `A --> B;` and `B --> C;` draw four boxes, `B` and
+      `B;` among them.
+- [ ] A node whose id starts with `end`, `subgraph`, or `classDef` declines the
+      whole diagram — `endpoint[X] --> B` renders as source. A sequence diagram
+      does the same for a participant called `loopback` or `optional`.
+- [ ] An edge label is drawn on the row the parent's connector occupies, so it
+      erases the line it belongs to, and the canvas is never widened for it, so
+      anything long is silently cut off at the right edge.
+- [ ] In `flowchart LR` an edge that skips a rank is drawn straight at the box
+      in between; since the line is drawn only where the canvas is still blank,
+      it vanishes entirely and the diagram is missing an edge.
+- [ ] A self-edge — `A --> A` — is dropped without a word, rather than drawn or
+      declined.
+- [ ] A sequence message whose text contains `-->`, as in `A->B: use --> this`,
+      is split at the arrow inside the text and the whole diagram is declined.
+- [ ] Retiring a placement clears the upload cache by image id without checking
+      that the id being deleted is the one cached. Resize the window once and
+      every later frame re-reads the file, rescales it, re-encodes a PNG, and
+      re-transmits it — for as long as the image stays on screen.
+
 ---
 
 ## Non-goals
