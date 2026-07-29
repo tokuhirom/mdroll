@@ -16,6 +16,8 @@ use base64::engine::general_purpose::STANDARD;
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 /// Escape-code payload size. Kitty's documented limit is 4096 bytes per chunk.
 const CHUNK: usize = 4096;
@@ -48,8 +50,15 @@ impl Default for CellSize {
     }
 }
 
-/// Ask the terminal how big a cell is, in pixels.
+/// Pixels per cell, from the terminal if it will say and the kernel otherwise.
+///
+/// `TIOCGWINSZ` carries a pixel size, but only the process on the same machine
+/// as the terminal can read it; over `ssh` it comes back as zero. Asking the
+/// terminal is what works at both ends of a connection.
 pub fn cell_size() -> CellSize {
+    if let Some(cell) = probed().cell {
+        return cell;
+    }
     match crossterm::terminal::window_size() {
         Ok(size) if size.width > 0 && size.height > 0 && size.columns > 0 && size.rows > 0 => {
             CellSize {
@@ -61,12 +70,21 @@ pub fn cell_size() -> CellSize {
     }
 }
 
-/// Detect graphics support from the environment.
+/// Whether the terminal can draw pictures.
 ///
-/// WezTerm is the reference terminal; kitty and ghostty speak the same
-/// protocol. Everything else degrades to alt text rather than emitting escape
-/// codes that would show up as garbage.
+/// The terminal is asked directly, and only when it cannot be — output is a
+/// pipe, or this is not Unix — does the environment get a say.
 pub fn detect() -> Protocol {
+    probed().protocol.unwrap_or_else(detect_from_env)
+}
+
+/// Guess graphics support from the environment.
+///
+/// A guess is all this can ever be. The variables named here are set by a
+/// terminal on the machine it runs on, so over `ssh` none of them are present
+/// however capable the terminal at the other end is. It is the fallback for
+/// when the terminal cannot be asked.
+pub fn detect_from_env() -> Protocol {
     let has = |name: &str| std::env::var_os(name).is_some();
     let term_program = std::env::var("TERM_PROGRAM").unwrap_or_default();
     let term = std::env::var("TERM").unwrap_or_default();
@@ -88,6 +106,157 @@ pub fn detect() -> Protocol {
         return Protocol::Kitty;
     }
     Protocol::None
+}
+
+/// What the terminal said when it was asked what it can do.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Probe {
+    /// `None` when there was no way to ask.
+    pub protocol: Option<Protocol>,
+    /// Pixels per cell, when the terminal was willing to say.
+    pub cell: Option<CellSize>,
+}
+
+/// Long enough for a reply to cross a slow link and come back, short enough
+/// that a terminal which answers nothing at all is not worth noticing.
+const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// The result of asking, worked out once and remembered.
+pub fn probed() -> Probe {
+    static PROBE: OnceLock<Probe> = OnceLock::new();
+    *PROBE.get_or_init(|| probe(PROBE_TIMEOUT))
+}
+
+/// Ask the terminal what it can do, and wait for the answer.
+///
+/// This is the only way that survives `ssh`. Escape sequences travel down the
+/// connection like any other output, so the terminal at the far end can be
+/// asked and can answer, while the environment variables it sets never left
+/// the machine it runs on.
+///
+/// The catch is that a terminal which does not understand the graphics query
+/// says nothing, and there is no silence to wait for. So a Device Attributes
+/// request is sent right after it: every terminal answers that one, and
+/// answers come back in the order the questions were asked. A DA reply with no
+/// graphics reply ahead of it is therefore a definite no, not a slow yes.
+#[cfg(unix)]
+pub fn probe(timeout: Duration) -> Probe {
+    use std::io::{IsTerminal, Read, Write};
+
+    let mut out = std::io::stdout();
+    if !out.is_terminal() || !std::io::stdin().is_terminal() {
+        return Probe::default();
+    }
+    let Ok(_raw) = RawMode::enter() else {
+        return Probe::default();
+    };
+
+    // `a=q` asks rather than draws. The payload is one transparent pixel,
+    // because a terminal is entitled to answer only a query it could act on,
+    // and `i=31` is an id nothing else here uses. Then the cell size, then the
+    // question every terminal answers.
+    let asked = write!(
+        out,
+        "\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b[16t\x1b[c"
+    )
+    .and_then(|()| out.flush())
+    .is_ok();
+    if !asked {
+        return Probe::default();
+    }
+
+    let deadline = Instant::now() + timeout;
+    let mut reply = Vec::new();
+    let mut chunk = [0u8; 256];
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() || !readable(left) {
+            break;
+        }
+        match std::io::stdin().read(&mut chunk) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => reply.extend_from_slice(&chunk[..n]),
+        }
+        // The DA reply is last, so once it is here there is nothing to wait
+        // for and no reason to hold up the redraw any longer.
+        if device_attributes_seen(&reply) {
+            break;
+        }
+    }
+
+    Probe {
+        protocol: Some(if contains(&reply, b"_Gi=31;OK") {
+            Protocol::Kitty
+        } else {
+            Protocol::None
+        }),
+        cell: parse_cell_size(&reply),
+    }
+}
+
+/// Windows has no `poll`, and no terminal that speaks this protocol either.
+#[cfg(not(unix))]
+pub fn probe(_timeout: Duration) -> Probe {
+    Probe::default()
+}
+
+/// Raw mode for the length of the question, so the reply arrives as bytes
+/// rather than being echoed or swallowed by line editing.
+#[cfg(unix)]
+struct RawMode;
+
+#[cfg(unix)]
+impl RawMode {
+    fn enter() -> std::io::Result<RawMode> {
+        crossterm::terminal::enable_raw_mode()?;
+        Ok(RawMode)
+    }
+}
+
+#[cfg(unix)]
+impl Drop for RawMode {
+    fn drop(&mut self) {
+        let _ = crossterm::terminal::disable_raw_mode();
+    }
+}
+
+#[cfg(unix)]
+fn readable(within: Duration) -> bool {
+    let mut fd = libc::pollfd {
+        fd: libc::STDIN_FILENO,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    let ms = within.as_millis().min(i32::MAX as u128) as i32;
+    // SAFETY: one initialised pollfd, and a count that matches it.
+    unsafe { libc::poll(&mut fd, 1, ms) > 0 }
+}
+
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+/// Whether a Device Attributes reply — `ESC [ ? … c` — has arrived in full.
+fn device_attributes_seen(reply: &[u8]) -> bool {
+    let mut rest = reply;
+    while let Some(at) = rest.windows(3).position(|w| w == b"\x1b[?") {
+        rest = &rest[at + 3..];
+        if rest.contains(&b'c') {
+            return true;
+        }
+    }
+    false
+}
+
+/// The cell size out of a `CSI 16 t` reply, which reads `ESC [ 6 ; h ; w t`.
+fn parse_cell_size(reply: &[u8]) -> Option<CellSize> {
+    let at = reply.windows(4).position(|w| w == b"\x1b[6;")?;
+    let rest = &reply[at + 4..];
+    let end = rest.iter().position(|b| *b == b't')?;
+    let body = std::str::from_utf8(&rest[..end]).ok()?;
+    let (h, w) = body.split_once(';')?;
+    let (h, w): (u16, u16) = (h.trim().parse().ok()?, w.trim().parse().ok()?);
+    (h > 0 && w > 0).then_some(CellSize { w, h })
 }
 
 /// Cell dimensions an image should occupy, preserving its aspect ratio.
@@ -461,6 +630,34 @@ mod tests {
     fn fit_never_returns_zero() {
         assert_eq!(fit((1, 1), CELL, 80, 40), (1, 1));
         assert_eq!(fit((0, 0), CELL, 0, 0), (1, 1));
+    }
+
+    #[test]
+    fn a_device_attributes_reply_ends_the_wait() {
+        assert!(device_attributes_seen(b"\x1b[?62;4;6;22c"));
+        // Still arriving: the terminator has not turned up yet.
+        assert!(!device_attributes_seen(b"\x1b[?62;4"));
+        assert!(!device_attributes_seen(b""));
+        // A `c` before the reply starts is not the reply's terminator.
+        assert!(!device_attributes_seen(b"c\x1b[?62"));
+    }
+
+    #[test]
+    fn a_graphics_reply_is_recognised_among_the_others() {
+        let reply = b"\x1b_Gi=31;OK\x1b\\\x1b[6;38;19t\x1b[?62;4c";
+        assert!(contains(reply, b"_Gi=31;OK"));
+        assert!(device_attributes_seen(reply));
+        assert_eq!(parse_cell_size(reply), Some(CellSize { w: 19, h: 38 }));
+    }
+
+    #[test]
+    fn a_terminal_that_will_not_say_its_cell_size_is_not_guessed_at() {
+        assert_eq!(parse_cell_size(b"\x1b[?62;4c"), None);
+        // Present but nonsense: a zero would divide the layout by zero.
+        assert_eq!(parse_cell_size(b"\x1b[6;0;0t"), None);
+        assert_eq!(parse_cell_size(b"\x1b[6;38t"), None);
+        // Truncated: the terminator never arrived.
+        assert_eq!(parse_cell_size(b"\x1b[6;38;19"), None);
     }
 
     #[test]

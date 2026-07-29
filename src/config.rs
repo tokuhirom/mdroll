@@ -25,12 +25,39 @@ pub struct ConfigFile {
     pub double_height_headings: Option<bool>,
     pub images: Option<bool>,
     pub remote_images: Option<bool>,
+    pub graphics: Option<String>,
     pub mouse: Option<bool>,
     pub east_asian_ambiguous_wide: Option<bool>,
     pub watch: Option<bool>,
     pub mermaid: Option<String>,
     #[serde(default)]
     pub keys: BTreeMap<String, Vec<String>>,
+}
+
+/// Whether the terminal is taken to speak the Kitty graphics protocol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GraphicsMode {
+    /// Work it out from the environment.
+    #[default]
+    Auto,
+    /// Assume it does, whatever the environment says. What `ssh` needs: the
+    /// variables a terminal sets exist on the machine the terminal runs on,
+    /// not on the one at the other end of the connection — but the escape
+    /// sequences travel down the wire like any other output.
+    Kitty,
+    /// Never draw pictures.
+    None,
+}
+
+impl GraphicsMode {
+    pub fn parse(s: &str) -> Option<GraphicsMode> {
+        match s.to_ascii_lowercase().as_str() {
+            "auto" | "detect" => Some(GraphicsMode::Auto),
+            "kitty" | "on" | "yes" | "force" => Some(GraphicsMode::Kitty),
+            "none" | "off" | "no" => Some(GraphicsMode::None),
+            _ => None,
+        }
+    }
 }
 
 /// How mermaid blocks are drawn.
@@ -84,6 +111,8 @@ pub struct Settings {
     /// Fetch images that live behind an `http(s)` URL. Opening a document then
     /// means talking to whichever hosts it points at, so it can be turned off.
     pub remote_images: bool,
+    /// Whether to believe the terminal can draw pictures.
+    pub graphics: GraphicsMode,
     pub mouse: bool,
     pub ambiguous_wide: bool,
     pub no_color: bool,
@@ -104,6 +133,7 @@ impl Default for Settings {
             double_height: true,
             images: true,
             remote_images: true,
+            graphics: GraphicsMode::default(),
             mouse: false,
             ambiguous_wide: false,
             no_color: false,
@@ -147,6 +177,9 @@ impl Settings {
         }
         if let Some(v) = file.remote_images {
             self.remote_images = v;
+        }
+        if let Some(v) = file.graphics.as_deref().and_then(GraphicsMode::parse) {
+            self.graphics = v;
         }
         if let Some(v) = file.mouse {
             self.mouse = v;

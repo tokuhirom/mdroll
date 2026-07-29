@@ -131,6 +131,7 @@ on a terminal.
 | `--mouse` | Enable mouse capture (needed for image click actions). Off by default. |
 | `--no-images` | Disable inline image rendering. |
 | `--no-remote-images` | Never fetch images over the network; show their alt text instead. |
+| `--graphics <MODE>` | `auto`, `kitty`, or `none`. Default `auto`, which asks the terminal. |
 | `--no-color` | Plain output, no ANSI styling. |
 | `--mermaid <MODE>` | `auto`, `text`, or `image`. Default `auto`. |
 | `--watch` | Reload automatically when the file changes on disk. |
@@ -244,6 +245,26 @@ the ones that depend on what the terminal can actually do.
 | Clickable links (OSC 8) | Most modern terminals | Use `F` or `o` instead |
 | Clipboard over SSH (OSC 52) | Most modern terminals | Enable it in your terminal |
 | Truecolor | `COLORTERM=truecolor` | Nearest 256-color match |
+
+### Over ssh
+
+Graphics work over `ssh`. The escape sequences travel down the connection like
+any other output, and the terminal drawing them is the one in front of you.
+
+What does not travel is the environment. `WEZTERM_PANE`, `KITTY_WINDOW_ID` and
+friends are set by a terminal on the machine it runs on, so a viewer on the
+far end that goes looking for them concludes there is nothing there. `mdroll`
+therefore asks the terminal instead, at startup, with a graphics query followed
+by a Device Attributes request — every terminal answers the second one, and
+replies come back in order, so a DA reply with no graphics reply ahead of it
+means no. The same round trip asks for the cell size, which `TIOCGWINSZ` also
+cannot report across a connection.
+
+If a terminal answers neither, `--graphics kitty` says to draw anyway:
+
+```toml
+graphics = "kitty"
+```
 
 ### Multiplexers
 
@@ -551,6 +572,7 @@ status = false                 # false = toast, true = persistent line
 double_height_headings = true
 images = true
 remote_images = true           # fetch images behind an http(s) URL
+graphics = "auto"              # "auto" | "kitty" | "none"
 mouse = false
 east_asian_ambiguous_wide = true
 watch = false

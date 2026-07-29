@@ -9,7 +9,9 @@ use crossterm::terminal::{
 use crossterm::{cursor, execute};
 use mdroll::app::{App, GraphicsInfo, browser_markdown};
 use mdroll::cli::Cli;
-use mdroll::config::{ConfigFile, MermaidMode, Settings, default_config_path, env_var};
+use mdroll::config::{
+    ConfigFile, GraphicsMode, MermaidMode, Settings, default_config_path, env_var,
+};
 use mdroll::graphics::Protocol;
 use mdroll::ir::HitTarget;
 use mdroll::render::{Renderer, detect_double_height};
@@ -65,8 +67,14 @@ fn real_main() -> Result<()> {
     // Images can be turned off without giving up big headings, so graphics are
     // detected either way and only the image path is gated on the setting.
     let mut graphics = GraphicsInfo::detect();
+    match settings.graphics {
+        GraphicsMode::Kitty => graphics.protocol = Protocol::Kitty,
+        GraphicsMode::None => graphics.protocol = Protocol::None,
+        GraphicsMode::Auto => {}
+    }
     // Down a pipe there is nothing to place an image on, so nothing is fetched
     // for one either — `mdroll README.md | head` must not talk to the network.
+    // This one is not a guess, so it overrides even an explicit mode.
     if !settings.images || piped {
         graphics.protocol = Protocol::None;
     }
@@ -177,6 +185,10 @@ fn resolve(cli: &Cli) -> Result<Settings> {
     }
     if cli.no_remote_images {
         settings.remote_images = false;
+    }
+    if let Some(mode) = &cli.graphics {
+        settings.graphics = GraphicsMode::parse(mode)
+            .with_context(|| format!("unknown --graphics mode {mode:?}"))?;
     }
     if cli.no_color {
         settings.no_color = true;
