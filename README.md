@@ -766,8 +766,6 @@ issue tracker nobody reads.
 
 - YAML front matter drawn as a table, the way GitHub shows it, rather than as a
   code block
-- GitHub's repository autolinks — `#123`, `user/repo#123`, commit SHAs — which
-  need the repository context that `git remote` can supply
 
 ---
 
@@ -777,6 +775,12 @@ issue tracker nobody reads.
 - **HTML or PDF export.** Use pandoc.
 - **A browser.** Link following opens your system handler; it does not render
   remote pages.
+- **Repository autolinks.** GitHub turns `#123` and a commit SHA into links
+  because it already knows which repository you are looking at. A viewer opening
+  a file from disk does not: the file may be in no repository, or in one that is
+  not the repository the text refers to, and picking a remote to guess with
+  would turn plain text into a link to the wrong project. Being told `#123` is
+  better than being sent somewhere unrelated.
 - **Universal terminal support.** WezTerm is the reference. Features degrade
   elsewhere rather than being designed down to the lowest common denominator.
 
