@@ -750,7 +750,7 @@ issue tracker nobody reads.
       to the heading. The contents pane already maps `#line-N` this way.
 - [x] Horizontal scrolling has no right-hand bound, so holding `l` in no-wrap
       mode runs off the end of the content and into empty screens.
-- [ ] `mmdc` is never found on Windows, where it is `mmdc.cmd`: the `PATH`
+- [x] `mmdc` is never found on Windows, where it is `mmdc.cmd`: the `PATH`
       search consults neither `PATHEXT` nor the executable bit.
 - [ ] Nothing ever expires from `~/.cache/mdroll`, so a badge whose image
       changes stays pinned to the first version fetched, with no way to refresh
