@@ -174,11 +174,41 @@ const OPERATORS: &[(&str, bool)] = &[
     ("--o", false),
 ];
 
+/// Split a line into statements.
+///
+/// A statement ends at a `;`, which mermaid takes as a separator and which its
+/// own documentation writes at the end of every line, or at a `%%`, which
+/// comments out the rest of the line wherever it appears.
+///
+/// Neither counts inside a label — `A[do this; then that]` — or inside quotes,
+/// so the split only happens outside brackets and outside quotes.
+fn split_statements(line: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let (mut start, mut depth, mut quoted) = (0usize, 0i32, false);
+    for (at, c) in line.char_indices() {
+        match c {
+            '"' => quoted = !quoted,
+            '[' | '(' | '{' if !quoted => depth += 1,
+            ']' | ')' | '}' if !quoted => depth -= 1,
+            ';' if !quoted && depth <= 0 => {
+                out.push(line[start..at].trim());
+                start = at + 1;
+            }
+            '%' if !quoted && depth <= 0 && line[at..].starts_with("%%") => {
+                out.push(line[start..at].trim());
+                start = line.len();
+                break;
+            }
+            _ => {}
+        }
+    }
+    out.push(line[start..].trim());
+    out.retain(|s| !s.is_empty());
+    out
+}
+
 pub fn parse_flowchart(code: &str) -> Option<Flowchart> {
-    let mut lines = code
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with("%%"));
+    let mut lines = code.lines().map(str::trim).flat_map(split_statements);
 
     let header = lines.next()?;
     let direction = match header.split_whitespace().nth(1).unwrap_or("TD") {
@@ -1188,9 +1218,41 @@ mod tests {
     }
 
     #[test]
+    fn a_statement_may_end_in_a_semicolon() {
+        // Mermaid's own documentation writes them, and reading `B;` as a node
+        // id drew a chart with two boxes called B.
+        let chart = parse_flowchart("graph TD;\n A --> B;\n B --> C;\n").unwrap();
+        let ids: Vec<&str> = chart.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(ids, ["A", "B", "C"]);
+        assert_eq!(chart.edges.len(), 2);
+    }
+
+    #[test]
+    fn semicolons_separate_statements_on_one_line() {
+        let chart = parse_flowchart("graph LR; A --> B; B --> C\n").unwrap();
+        assert_eq!(chart.direction, Direction::LeftRight);
+        assert_eq!(chart.nodes.len(), 3);
+        assert_eq!(chart.edges.len(), 2);
+    }
+
+    #[test]
+    fn a_semicolon_inside_a_label_stays_in_the_label() {
+        let chart = parse_flowchart("flowchart TD\n A[stop; then go] --> B\n").unwrap();
+        assert_eq!(chart.nodes[0].label, "stop; then go");
+        assert_eq!(chart.nodes.len(), 2);
+    }
+
+    #[test]
     fn comments_are_ignored() {
         let chart = parse_flowchart("flowchart TD\n%% a comment\n A --> B\n").unwrap();
         assert_eq!(chart.edges.len(), 1);
+    }
+
+    #[test]
+    fn a_comment_after_a_statement_is_not_a_node() {
+        let chart = parse_flowchart("flowchart TD\n A --> B; %% a trailing note\n").unwrap();
+        let ids: Vec<&str> = chart.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(ids, ["A", "B"]);
     }
 
     #[test]

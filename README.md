@@ -815,7 +815,7 @@ that declining beats drawing something subtly wrong.
 - [x] `flowchart RL` and `BT` reverse every *edge* instead of the layout, so
       `A --> B` is drawn as an arrow pointing at `A`. The one thing a diagram
       says is which way its arrows point.
-- [ ] A statement ending in `;`, which mermaid's own documentation writes,
+- [x] A statement ending in `;`, which mermaid's own documentation writes,
       makes a second node: `A --> B;` and `B --> C;` draw four boxes, `B` and
       `B;` among them.
 - [ ] A node whose id starts with `end`, `subgraph`, or `classDef` declines the
