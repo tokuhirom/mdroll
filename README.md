@@ -784,6 +784,21 @@ issue tracker nobody reads.
 - [x] YAML front matter drawn as a table, the way GitHub draws it
 - [x] A parsed subset, falling back to source for anything beyond it
 
+### v1.4 — Measurement
+
+Defects in the parts this document makes its strongest claims about, found by
+reading them against those claims. Each was invisible to the existing tests
+because the tests used text that happened to avoid the case.
+
+- [x] Kinsoku applied to forced breaks, not only to chosen ones: text with no
+      UAX #14 opportunity anywhere could still open a line with `。`
+- [x] Tab stops counted in display columns, so a tab after `日` lands where the
+      terminal puts it
+- [x] A table keeps its list marker wherever it sits in the document, rather
+      than only when it opens the file
+- [x] A double-height heading scrolls horizontally at the speed of the text
+      under it, rather than twice as fast
+
 ---
 
 ## Non-goals
