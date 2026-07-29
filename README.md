@@ -613,6 +613,53 @@ your terminal's palette. This avoids fighting WezTerm's transparency and
 background image settings. Named themes paint backgrounds only when explicitly
 selected.
 
+#### Writing one
+
+Start from an existing theme rather than a blank file:
+
+```console
+$ mdroll --dump-theme dracula > mine.toml
+$ mdroll --theme ./mine.toml README.md
+$ mv mine.toml ~/.config/mdroll/themes/     # once you like it
+```
+
+`--dump-theme` writes the *resolved* theme: every key the parser reads,
+including the ones this theme left at their default. That is the reference — a
+key list written out by hand here would be wrong the first time a key was added
+and nobody noticed, and a round-trip test asserts that dumping a theme and
+reading it back gives the same theme, so the output cannot drift from the code.
+
+`--theme` takes a path as well as a name, so the file can be rendered where it
+is being edited instead of being installed after every change. A name and a path
+never collide: a name is a file stem under `~/.config/mdroll/themes`, so it
+carries neither a separator nor a `.toml` extension. A user theme whose stem
+matches a bundled one replaces it, and `--list-themes` shows both.
+
+Every key is optional and absent ones fall back, so a theme can be four lines
+long. Two fallbacks are worth knowing:
+
+- `h4`, `h5` and `h6` inherit from the deepest heading level that *was* given,
+  so setting `h1`..`h3` styles all six sensibly rather than leaving three of
+  them unstyled.
+- `foreground` and `background` left unset mean *inherit*, which is what
+  `terminal` does deliberately. Setting them is what makes a theme paint over
+  your terminal's own palette.
+
+Colors are `#rrggbb`, `#rgb`, a 0-255 palette index, or a name: `red`,
+`brightred`, and so on through the sixteen, plus `reset` for the terminal's
+default. Note that `white` is the dim one — the bright one is `brightwhite`.
+
+Attributes are `bold`, `italic`, `underline`, `strikethrough`, `dim` and
+`reverse`. They only ever go *on*: a style is merged over the default rather
+than replacing it, so writing `bold = false` against a key that defaults to bold
+does nothing. Nothing in a theme can turn an attribute off, which is why a dump
+writes only the ones that are set.
+
+A misspelled *section* (`[inlnie]`) and a misspelled *attribute*
+(`{ blod = true }`) are both errors. A misspelled key *within* a section
+(`lnik = { … }`) is not: the sections are maps, so an unrecognised entry is
+carried and never looked at. That one is a defect and is listed as such below.
+
 Truecolor is assumed; 256-color terminals get a nearest-color downgrade.
 
 ### Configuration
@@ -881,9 +928,14 @@ a heading beyond its colour.
       in the repository, not in the build. `--dump-theme <name>` writing the
       resolved theme back out as TOML answers it, and is a starting point for a
       new theme as well as a reference that cannot drift from the code.
-- [ ] The Themes section names a handful of keys by example and leaves the rest
+- [x] The Themes section names a handful of keys by example and leaves the rest
       to be guessed at. It should say how a theme is written, where it goes, and
       what is derived when a key is absent.
+- [ ] A misspelled key inside a theme section is carried and never looked at.
+      `[inline]` and `{ blod = true }` are both `deny_unknown_fields` and say
+      so, but the keys between them are map entries, so `lnik = { … }` is
+      accepted in silence and the link stays unstyled. Being told beats
+      wondering why the colour did not take.
 - [ ] A heading can be coloured but not decorated. GitHub draws `h1` and `h2`
       with a bottom border, which is the same pair this renderer draws at double
       height; a left bar is the other decoration worth having. Drawn into the
