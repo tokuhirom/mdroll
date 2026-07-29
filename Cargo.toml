@@ -2,7 +2,7 @@
 name = "mdroll"
 version = "0.1.2"
 edition = "2024"
-description = "A terminal Markdown viewer that takes Japanese text seriously"
+description = "A terminal Markdown viewer with big headings and real GFM support"
 license = "MIT"
 repository = "https://github.com/tokuhirom/mdroll"
 readme = "README.md"
