@@ -42,8 +42,10 @@ gracefully rather than being the design center.
 
 ## Features
 
-- **Full GitHub Flavored Markdown** — tables, task lists, strikethrough,
-  autolinks, footnotes, and `> [!NOTE]` alerts.
+- **Everything GitHub renders** — tables, task lists, strikethrough, autolinks,
+  footnotes, `> [!NOTE]` alerts, `:rocket:` emoji, and definition lists. Not
+  just the five extensions the GFM spec defines, and nothing GitHub does not
+  have — see [What counts as Markdown here](#what-counts-as-markdown-here).
 - **The HTML in your README** — centred logos, badge rows, `<details>`
   sections, `<kbd>` keys, HTML tables and lists, all rendered rather than
   dumped as tags.
@@ -409,6 +411,38 @@ expensive to retrofit.
 toggling, and terminal resize are all handled by discarding the layout and
 recomputing it. No incremental state, no invalidation logic, no drift.
 
+### What counts as Markdown here
+
+The rule is **what GitHub renders**, which is not the same as the GFM spec.
+
+The spec covers five extensions — tables, task lists, strikethrough, autolinks,
+and disallowed raw HTML. GitHub renders considerably more than that: `> [!NOTE]`
+alerts, footnotes, `:rocket:` emoji shortcodes, `$...$` math, and YAML front
+matter are all GitHub features that no spec mentions. Since the point of this
+viewer is to show you the file the way GitHub will, the line is drawn at
+GitHub's behaviour rather than at the spec, and those are all on.
+
+The rule cuts the other way too, which matters more. The Markdown parser
+underneath, [comrak](https://github.com/kivikakk/comrak), offers extensions
+GitHub does not have, and four of them are deliberately **off** because turning
+them on changes what an ordinary document means:
+
+| Extension | Syntax | With it on | On GitHub |
+| --- | --- | --- | --- |
+| `underline` | `__text__` | underlined | **bold** |
+| `subscript` | `~text~` | subscript | ~~struck through~~ |
+| `superscript` | `^text^` | superscript | literal `^text^` |
+| `spoiler` | `\|\|text\|\|` | hidden | literal `\|\|text\|\|` |
+
+The first two are the reason this is a rule and not a preference. `__bold__`
+appears in most READMEs, and GFM defines strikethrough as one *or two* tildes —
+so `subscript` does not merely diverge from GitHub, it breaks the spec the
+project claims to implement. Superscript and subscript are still available the
+way they are on GitHub, through `<sup>` and `<sub>`.
+
+Each of the four has a test pinning the GitHub behaviour, so re-enabling one
+fails the suite rather than quietly changing every document.
+
 ### HTML
 
 READMEs are full of HTML that Markdown has no syntax for: centred logos, badge
@@ -686,10 +720,20 @@ Key specs are a single character, a name such as `Esc`, `Space`, `Tab`,
 - [x] Release automation, binaries for macOS/Linux/Windows
 - [x] Documentation and man page (`mdroll --man > mdroll.1`)
 
+### v1.1 — GitHub parity
+
+- [x] `:rocket:` emoji shortcodes, with unknown codes left as written
+- [x] Definition lists
+- [x] Math shown as its LaTeX source, since a terminal cannot typeset it
+- [x] comrak extensions GitHub does not have turned off, with tests pinning
+      `__bold__` and single-tilde `~strikethrough~` to GitHub's reading
+
 ### Beyond
 
-- Math via `$...$` and `$$...$$`
-- Definition lists
+- YAML front matter drawn as a table, the way GitHub shows it, rather than as a
+  code block
+- GitHub's repository autolinks — `#123`, `user/repo#123`, commit SHAs — which
+  need the repository context that `git remote` can supply
 
 ---
 
