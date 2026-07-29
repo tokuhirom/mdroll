@@ -5,7 +5,7 @@
 //! else, at the cost of launching a headless browser — so results are cached on
 //! disk by content hash, and the work happens off the UI thread.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -31,28 +31,12 @@ fn which(name: &str) -> Option<PathBuf> {
 }
 
 pub fn cache_dir() -> Option<PathBuf> {
-    dirs::cache_dir().map(|d| d.join("mdroll").join("mermaid"))
-}
-
-/// FNV-1a. The cache key only has to be stable across runs of the same
-/// binary, which rules out `DefaultHasher` — its output is explicitly not
-/// guaranteed between Rust releases.
-fn hash(parts: &[&str]) -> u64 {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for part in parts {
-        for byte in part.as_bytes() {
-            h ^= *byte as u64;
-            h = h.wrapping_mul(0x0000_0100_0000_01b3);
-        }
-        h ^= 0xff;
-        h = h.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    h
+    crate::cache::dir("mermaid")
 }
 
 pub fn cache_path(code: &str, dark: bool) -> Option<PathBuf> {
     let theme = if dark { "dark" } else { "default" };
-    let key = hash(&[code, theme]);
+    let key = crate::cache::key(&[code, theme]);
     Some(cache_dir()?.join(format!("{key:016x}-{theme}.png")))
 }
 
@@ -70,11 +54,13 @@ pub fn render(code: &str, dark: bool) -> Result<PathBuf> {
     let Some(mmdc) = binary() else {
         bail!("mmdc is not installed");
     };
-    let dir = output.parent().context("cache path has no parent")?;
-    std::fs::create_dir_all(dir)?;
+    // Owner-only: the diagram source goes through here, and the rendered PNG
+    // says as much about the document as the source does.
+    let dir = crate::cache::make_dir("mermaid")?;
 
     let input = dir.join(format!("{}.mmd", std::process::id()));
     std::fs::write(&input, code)?;
+    crate::cache::restrict(&input)?;
     let result = run(&mmdc, &input, &output, dark);
     let _ = std::fs::remove_file(&input);
     result?;
@@ -82,6 +68,8 @@ pub fn render(code: &str, dark: bool) -> Result<PathBuf> {
     if !output.is_file() {
         bail!("mmdc reported success but wrote nothing");
     }
+    // `mmdc` wrote it, so its mode is whatever that process's umask allowed.
+    crate::cache::restrict(&output)?;
     Ok(output)
 }
 
@@ -139,13 +127,6 @@ mod tests {
         assert_ne!(a, b, "different diagrams must not share a file");
         assert_ne!(a, c, "different themes must not share a file");
         assert_eq!(a, cache_path("flowchart TD\n A-->B", true));
-    }
-
-    #[test]
-    fn the_hash_is_stable_and_separates_its_parts() {
-        assert_eq!(hash(&["ab", "c"]), hash(&["ab", "c"]));
-        // Without a separator these would collide.
-        assert_ne!(hash(&["ab", "c"]), hash(&["a", "bc"]));
     }
 
     #[test]

@@ -13,9 +13,11 @@
 
 pub mod app;
 pub mod bigtext;
+pub mod cache;
 pub mod cli;
 pub mod clipboard;
 pub mod config;
+pub mod fetch;
 pub mod graphics;
 pub mod highlight;
 pub mod html;
@@ -27,6 +29,7 @@ pub mod mmdc;
 pub mod parse;
 pub mod render;
 pub mod screen;
+pub mod svg;
 pub mod theme;
 pub mod width;
 pub mod wrap;

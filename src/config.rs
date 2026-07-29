@@ -24,6 +24,7 @@ pub struct ConfigFile {
     pub status: Option<bool>,
     pub double_height_headings: Option<bool>,
     pub images: Option<bool>,
+    pub remote_images: Option<bool>,
     pub mouse: Option<bool>,
     pub east_asian_ambiguous_wide: Option<bool>,
     pub watch: Option<bool>,
@@ -80,6 +81,9 @@ pub struct Settings {
     pub status: bool,
     pub double_height: bool,
     pub images: bool,
+    /// Fetch images that live behind an `http(s)` URL. Opening a document then
+    /// means talking to whichever hosts it points at, so it can be turned off.
+    pub remote_images: bool,
     pub mouse: bool,
     pub ambiguous_wide: bool,
     pub no_color: bool,
@@ -99,6 +103,7 @@ impl Default for Settings {
             status: false,
             double_height: true,
             images: true,
+            remote_images: true,
             mouse: false,
             ambiguous_wide: false,
             no_color: false,
@@ -139,6 +144,9 @@ impl Settings {
         }
         if let Some(v) = file.images {
             self.images = v;
+        }
+        if let Some(v) = file.remote_images {
+            self.remote_images = v;
         }
         if let Some(v) = file.mouse {
             self.mouse = v;

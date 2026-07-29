@@ -63,6 +63,10 @@ pub struct Cli {
     #[arg(long)]
     pub no_images: bool,
 
+    /// Never fetch images over the network; show their alt text instead.
+    #[arg(long)]
+    pub no_remote_images: bool,
+
     /// Plain output, no ANSI styling.
     #[arg(long)]
     pub no_color: bool,

@@ -373,8 +373,15 @@ impl ImageStore {
 }
 
 /// Decode, downscale, and re-encode as PNG.
+///
+/// An SVG skips the downscale: it is rasterized straight at the target size, so
+/// a logo is as sharp as the terminal's cells allow.
 pub fn encode_png(path: &Path, target: (u32, u32)) -> Result<Vec<u8>> {
-    let img = image::open(path)?;
+    let data = std::fs::read(path)?;
+    if crate::svg::looks_like_svg(&data) {
+        return crate::svg::render_png(&data, target);
+    }
+    let img = image::load_from_memory(&data)?;
     let scaled = if img.width() > target.0 || img.height() > target.1 {
         img.thumbnail(target.0.max(1), target.1.max(1))
     } else {
@@ -409,8 +416,19 @@ fn transmit<W: Write>(out: &mut W, kitty_id: u32, png: &[u8]) -> Result<()> {
 }
 
 /// Pixel dimensions of an image file, read from its header.
+///
+/// Bitmaps are answered from the header alone. Only when that fails is the file
+/// read in full and tried as SVG, which is the one format `image` cannot see
+/// into.
 pub fn dimensions(path: &Path) -> Option<(u32, u32)> {
-    image::image_dimensions(path).ok()
+    if let Ok(size) = image::image_dimensions(path) {
+        return Some(size);
+    }
+    let data = std::fs::read(path).ok()?;
+    if !crate::svg::looks_like_svg(&data) {
+        return None;
+    }
+    crate::svg::dimensions(&data)
 }
 
 #[cfg(test)]

@@ -47,6 +47,8 @@ gracefully rather than being the design center.
 - **The HTML in your README** — centred logos, badge rows, `<details>`
   sections, `<kbd>` keys, HTML tables and lists, all rendered rather than
   dumped as tags.
+- **The pictures in your README** — logos and badge rows drawn as pictures,
+  including the SVG ones, and including the ones behind an `https://` URL.
 - **Mermaid diagrams** — `flowchart` and `sequenceDiagram` drawn with box
   characters, laid out by rank. Anything else goes through `mmdc` and renders
   as a picture, if you have it installed.
@@ -128,6 +130,7 @@ on a terminal.
 | `--status` / `--no-status` | Show a persistent status line instead of transient toasts. |
 | `--mouse` | Enable mouse capture (needed for image click actions). Off by default. |
 | `--no-images` | Disable inline image rendering. |
+| `--no-remote-images` | Never fetch images over the network; show their alt text instead. |
 | `--no-color` | Plain output, no ANSI styling. |
 | `--mermaid <MODE>` | `auto`, `text`, or `image`. Default `auto`. |
 | `--watch` | Reload automatically when the file changes on disk. |
@@ -257,6 +260,43 @@ images will fall back to alt text:
 kitty_graphics = true
 ```
 
+### Images
+
+A paragraph that holds nothing but pictures is a figure: one logo on its own,
+or a whole row of badges laid out side by side and wrapped when the row fills
+up. A lone figure keeps its alt text as a caption; a badge row does not, since
+the badges say it themselves. `<img width>` and `<img height>` are honoured,
+which is what stops a logo authored at 1300 pixels wide from filling the
+terminal. A picture wrapped in a link opens the link — `o` on a badge goes to
+the build, not to a PNG of a build's state.
+
+SVG is rasterized through [resvg](https://github.com/linebender/resvg) at the
+size it will be displayed at, so a logo is as sharp as the terminal's cells
+allow. Badge text needs fonts, which are taken from the system.
+
+Images behind an `http(s)` URL are fetched on worker threads and cached under
+`~/.cache/mdroll/images`, keyed by URL. The document is drawn immediately with
+alt text where the pictures will go, and each one replaces its text as it
+lands; a second look at the same document is instant and works offline.
+
+The cache is a record of which documents have been opened and what they pointed
+at, so on Unix it is kept to its owner: `~/.cache/mdroll` and everything under
+it are `0700`, and downloads land as `0600`. A directory left open by an older
+version is narrowed on the next run.
+
+Opening a document means talking to whichever hosts it points at, so:
+
+```console
+$ mdroll --no-remote-images README.md   # once
+```
+
+```toml
+remote_images = false                   # always
+```
+
+Nothing is fetched when stdout is not a terminal, so `mdroll README.md | head`
+never touches the network. `data:` and `file:` URLs are not fetched at all.
+
 ### Mermaid
 
 Box drawings handle `flowchart` and `sequenceDiagram`. Everything else — pie
@@ -317,7 +357,7 @@ struct Span {
 
 struct Block {
     source_range: Range<usize>,   // line range in the original file
-    kind: BlockKind,              // Heading(u8) | Para | Code | Quote | List | Table | Image
+    kind: BlockKind,              // Heading(u8) | Para | Code | Quote | List | Table | Images
     spans: Vec<Span>,
 }
 
@@ -510,6 +550,7 @@ margin = 2                     # blank columns on each side
 status = false                 # false = toast, true = persistent line
 double_height_headings = true
 images = true
+remote_images = true           # fetch images behind an http(s) URL
 mouse = false
 east_asian_ambiguous_wide = true
 watch = false

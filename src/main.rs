@@ -58,10 +58,16 @@ fn real_main() -> Result<()> {
     let theme = theme::load(&settings.theme)?;
     let (text, path) = read_input(&cli)?;
 
+    // Piped output means nobody is there to press a key, and nothing to draw a
+    // picture into: the document is printed once and the program exits.
+    let piped = !std::io::stdout().is_terminal();
+
     // Images can be turned off without giving up big headings, so graphics are
     // detected either way and only the image path is gated on the setting.
     let mut graphics = GraphicsInfo::detect();
-    if !settings.images {
+    // Down a pipe there is nothing to place an image on, so nothing is fetched
+    // for one either — `mdroll README.md | head` must not talk to the network.
+    if !settings.images || piped {
         graphics.protocol = Protocol::None;
     }
     // A terminal with graphics but no DECDHL — kitty, ghostty — can still have
@@ -71,10 +77,9 @@ fn real_main() -> Result<()> {
     }
     let mut app = App::new(text, path, settings, theme, current_screen()?, graphics);
 
-    // Piped output means nobody is there to press a key. Render the whole
-    // document once and exit, the way a pager does when it is not on a
-    // terminal, rather than failing to enter raw mode.
-    if !std::io::stdout().is_terminal() {
+    // The way a pager does when it is not on a terminal, rather than failing to
+    // enter raw mode.
+    if piped {
         return dump(&mut app);
     }
     run(&mut app)
@@ -169,6 +174,9 @@ fn resolve(cli: &Cli) -> Result<Settings> {
     }
     if cli.no_images {
         settings.images = false;
+    }
+    if cli.no_remote_images {
+        settings.remote_images = false;
     }
     if cli.no_color {
         settings.no_color = true;
@@ -358,6 +366,9 @@ fn run(app: &mut App) -> Result<()> {
             if app.poll_diagrams() {
                 redraw = true;
             }
+            if app.poll_downloads() {
+                redraw = true;
+            }
             if app.settings.watch {
                 let now = app.mtime();
                 if now != seen_mtime {
@@ -384,9 +395,7 @@ fn run(app: &mut App) -> Result<()> {
                 MouseEventKind::Down(MouseButton::Left) => {
                     let url = match app.placement.target_at(mouse.column, mouse.row) {
                         Some(HitTarget::Link(id)) => app.doc.links.get(id.0).map(|l| l.url.clone()),
-                        Some(HitTarget::Image(id)) => {
-                            app.doc.images.get(id.0).map(|i| i.url.clone())
-                        }
+                        Some(HitTarget::Image(id)) => app.image_target(id),
                         None => None,
                     };
                     if let Some(url) = url {

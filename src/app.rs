@@ -99,6 +99,8 @@ pub struct App {
 
     /// Diagrams being rendered by `mmdc` on a worker thread.
     diagrams: Option<Receiver<Diagram>>,
+    /// Images being fetched over the network by worker threads.
+    downloads: Option<Receiver<Fetched>>,
     /// Bumped on every reparse, so results for a document that has since been
     /// replaced are recognised as stale and dropped.
     generation: u64,
@@ -111,6 +113,22 @@ struct Diagram {
     path: PathBuf,
     size: (u32, u32),
 }
+
+/// A finished download, on its way back to the UI thread.
+struct Fetched {
+    generation: u64,
+    /// Index into [`Document::images`].
+    image: usize,
+    path: PathBuf,
+    size: (u32, u32),
+}
+
+/// How many downloads run at once.
+///
+/// A README's badge row is half a dozen requests to two or three hosts, so a
+/// handful of threads turns a visible stagger into one blink. More than this
+/// would just be rude to the hosts.
+const FETCH_THREADS: usize = 4;
 
 /// What the terminal can do with pictures. Passed in rather than detected
 /// inside [`App`] so tests are not at the mercy of the environment.
@@ -188,6 +206,7 @@ impl App {
             raster_headings: graphics.raster_headings,
             edit_request: None,
             diagrams: None,
+            downloads: None,
             generation: 0,
             images: {
                 let mut store = ImageStore::new(graphics.protocol, graphics.cell);
@@ -233,7 +252,6 @@ impl App {
     /// and the picture replaces it when it arrives.
     pub fn prepare_diagrams(&mut self) {
         self.diagrams = None;
-        self.generation = self.generation.wrapping_add(1);
         if self.settings.mermaid == MermaidMode::Text
             || !self.settings.images
             || !self.graphics.available()
@@ -308,11 +326,9 @@ impl App {
                 continue;
             }
             let id = ImageId(self.doc.images.len());
-            self.doc.images.push(Image {
-                url: diagram.path.display().to_string(),
-                alt: String::new(),
-                size: Some(diagram.size),
-            });
+            let mut image = Image::new(diagram.path.display().to_string(), "");
+            image.measured(diagram.size);
+            self.doc.images.push(image);
             self.images.register(id.0, diagram.path);
             self.doc.blocks[diagram.block].image = Some(id);
             changed = true;
@@ -327,8 +343,15 @@ impl App {
     /// its pixel size.
     ///
     /// Layout is pure and cannot touch the disk, so this has to happen first;
-    /// an image whose size stays `None` renders as its alt text.
+    /// an image whose size stays `None` renders as its alt text. A remote image
+    /// already in the cache counts as measured; the rest are handed to worker
+    /// threads and appear when they land.
+    ///
+    /// This is the first thing a new document does, so it is where the
+    /// generation counter turns over.
     pub fn measure_images(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+        crate::fetch::prepare();
         let base = self
             .path
             .as_ref()
@@ -337,18 +360,111 @@ impl App {
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."));
         self.images.forget_all();
+
+        let mut wanted: Vec<(usize, String)> = Vec::new();
         for (i, image) in self.doc.images.iter_mut().enumerate() {
             image.size = None;
-            // No network fetching: a remote image stays as alt text.
-            if image.url.contains("://") {
+            let path = if crate::fetch::is_remote(&image.url) {
+                match crate::fetch::cached(&image.url) {
+                    Some(path) => path,
+                    None => {
+                        wanted.push((i, image.url.clone()));
+                        continue;
+                    }
+                }
+            } else if image.url.contains("://") {
+                // Some other scheme — `data:`, `file:` — which nothing here
+                // knows how to open. It stays as alt text.
                 continue;
-            }
-            let path = base.join(&image.url);
+            } else {
+                base.join(&image.url)
+            };
             if let Some(size) = graphics::dimensions(&path) {
-                image.size = Some(size);
+                image.measured(size);
                 self.images.register(i, path);
             }
         }
+        self.start_downloads(wanted);
+    }
+
+    /// Hand the images that are not on disk yet to worker threads.
+    ///
+    /// Nothing waits: the document is drawn with alt text where the pictures
+    /// will go, and each one replaces its text as it arrives.
+    fn start_downloads(&mut self, wanted: Vec<(usize, String)>) {
+        self.downloads = None;
+        if wanted.is_empty()
+            || !self.settings.remote_images
+            || !self.settings.images
+            || !self.graphics.available()
+        {
+            return;
+        }
+
+        let (tx, rx) = channel();
+        let generation = self.generation;
+        for worker in 0..FETCH_THREADS.min(wanted.len()) {
+            // Dealt round-robin rather than in chunks, so the images near the
+            // top of the document — the ones on screen — are spread across the
+            // threads instead of queued behind one of them.
+            let jobs: Vec<(usize, String)> = wanted
+                .iter()
+                .skip(worker)
+                .step_by(FETCH_THREADS)
+                .cloned()
+                .collect();
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                for (image, url) in jobs {
+                    // A failed fetch is not worth a toast: the alt text staying
+                    // put says it well enough, and a document can point at a
+                    // dozen dead badges.
+                    let Ok(path) = crate::fetch::fetch(&url) else {
+                        continue;
+                    };
+                    let Some(size) = graphics::dimensions(&path) else {
+                        continue;
+                    };
+                    // A closed channel means the document moved on; stop.
+                    if tx
+                        .send(Fetched {
+                            generation,
+                            image,
+                            path,
+                            size,
+                        })
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+            });
+        }
+        self.downloads = Some(rx);
+    }
+
+    /// Take delivery of any finished downloads. Returns whether anything landed.
+    pub fn poll_downloads(&mut self) -> bool {
+        let Some(rx) = &self.downloads else {
+            return false;
+        };
+        let arrived: Vec<Fetched> = rx.try_iter().collect();
+        let mut changed = false;
+        for fetched in arrived {
+            if fetched.generation != self.generation {
+                continue;
+            }
+            let Some(image) = self.doc.images.get_mut(fetched.image) else {
+                continue;
+            };
+            image.measured(fetched.size);
+            self.images.register(fetched.image, fetched.path);
+            changed = true;
+        }
+        if changed {
+            self.relayout();
+        }
+        changed
     }
 
     pub fn calc(&self) -> WidthCalc {
@@ -557,6 +673,12 @@ impl App {
 
     pub fn toggle_images(&mut self) {
         self.settings.images = !self.settings.images;
+        // Turning them on is the first chance the document has had to fetch
+        // anything, if it started with images off.
+        if self.settings.images {
+            self.measure_images();
+            self.prepare_diagrams();
+        }
         self.relayout();
         self.toast(if self.settings.images {
             "images on"
@@ -808,11 +930,30 @@ impl App {
         let idx = self.cursor?;
         let doc = self.active_doc();
         let block = doc.blocks.get(idx)?;
-        if let BlockKind::Image(id) = block.kind {
-            return doc.images.get(id.0).map(|i| i.url.clone());
+        // A badge row has several; `o` takes the first, the way it takes the
+        // first link in a paragraph.
+        if let BlockKind::Images(ids) = &block.kind
+            && let Some(id) = ids.first()
+        {
+            return self.image_target(*id);
         }
         let id = block.spans.iter().find_map(|s| s.link)?;
         doc.links.get(id.0).map(|l| l.url.clone())
+    }
+
+    /// What opening an image should go to: where it links, if it links
+    /// anywhere, and otherwise the picture itself.
+    ///
+    /// A badge is a picture of a build status wrapped in a link to the build.
+    /// The link is the useful half.
+    pub fn image_target(&self, id: ImageId) -> Option<String> {
+        let doc = self.active_doc();
+        let image = doc.images.get(id.0)?;
+        image
+            .link
+            .and_then(|link| doc.links.get(link.0))
+            .map(|link| link.url.clone())
+            .or_else(|| Some(image.url.clone()))
     }
 
     pub fn open(&mut self, url: &str) {
@@ -1370,6 +1511,27 @@ mod tests {
     fn long_doc() -> App {
         let body: String = (1..=50).map(|i| format!("line {i}\n\n")).collect();
         app(&body)
+    }
+
+    #[test]
+    fn opening_a_badge_goes_where_it_links_not_to_its_picture() {
+        let app = app("[![Build](b.svg)](https://a.example)\n");
+        assert_eq!(
+            app.image_target(ImageId(0)).as_deref(),
+            Some("https://a.example")
+        );
+    }
+
+    #[test]
+    fn opening_an_unlinked_picture_goes_to_the_picture() {
+        let app = app("![a picture](pic.png)\n");
+        assert_eq!(app.image_target(ImageId(0)).as_deref(), Some("pic.png"));
+    }
+
+    #[test]
+    fn a_remote_image_is_never_looked_for_on_disk() {
+        let app = app("![logo](https://example.invalid/never-fetched-3b91c.svg)\n");
+        assert_eq!(app.doc.images[0].size, None, "nothing to measure yet");
     }
 
     #[test]
