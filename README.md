@@ -243,7 +243,10 @@ is bound, not the one shipped, so rebinding `help` renames the hint too.
 A key bound to nothing says so — `x does nothing — H for help` — rather than
 being swallowed. Silence is what a viewer that has stopped responding looks
 like, and it is not an answer to the reader who has just discovered that a key
-they guessed at is not the key.
+they guessed at is not the key. `Ctrl-C` is answered with `q to quit` instead:
+raw mode means it arrives as a key rather than as a signal, and the person
+pressing it wants the way out, not the list of keys. It does not quit — that
+would be a binding the keymap does not know about — it says where the exit is.
 
 ---
 
@@ -1208,12 +1211,15 @@ told once.
 - [x] An unbound key does nothing at all — no toast, no bell — so pressing one
       is indistinguishable from a viewer that has stopped responding, and the
       reader learns nothing about how to find out what would have worked.
-- [ ] `Ctrl-C` is bound to nothing, and raw mode means it arrives as a key
+- [x] `Ctrl-C` is bound to nothing, and raw mode means it arrives as a key
       rather than as a signal, so the one key a reader reaches for when they
       believe a terminal program has hung is the one that proves them right.
       It now reports itself like any other unbound key, which says the viewer
       is alive but answers a question nobody asked: someone pressing `Ctrl-C`
-      wants out, and should be told about `q` — or simply be let out.
+      wants out, and should be told about `q` — or simply be let out. Told,
+      in the end. Quitting on it would put a second exit in the program that
+      the keymap cannot see, cannot rebind and does not list, and a reader who
+      is shown `q` once knows it for the whole session.
 
 ---
 
