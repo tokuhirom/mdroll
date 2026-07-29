@@ -865,6 +865,45 @@ And one left over from that last one:
       edges and there is nowhere left to put the fourth label. Two of the four
       are drawn over.
 
+### v1.6 — Themes
+
+A theme can already say what colour a heading is, and a user can already write
+one. What is missing is everything around that: there is no way to point at a
+theme file that is not yet installed, no way to find out which keys exist
+without the repository checked out, and no way for a theme to say anything about
+a heading beyond its colour.
+
+- [ ] `--theme` takes a name and nothing else, so `theme::load_path` cannot be
+      reached from the command line and a theme being written has to be copied
+      into the config directory before it can be looked at.
+- [ ] No way to see a theme's keys from an installed binary. `themes/*.toml` are
+      in the repository, not in the build. `--dump-theme <name>` writing the
+      resolved theme back out as TOML answers it, and is a starting point for a
+      new theme as well as a reference that cannot drift from the code.
+- [ ] The Themes section names a handful of keys by example and leaves the rest
+      to be guessed at. It should say how a theme is written, where it goes, and
+      what is derived when a key is absent.
+- [ ] A heading can be coloured but not decorated. GitHub draws `h1` and `h2`
+      with a bottom border, which is the same pair this renderer draws at double
+      height; a left bar is the other decoration worth having. Drawn into the
+      bitmap they cost no rows, because the text occupies 0.78 of the two the
+      layout already reserved.
+- [ ] Decoration colours have to be derived rather than enumerated. A theme
+      written before the feature existed — including every theme a user already
+      has — would otherwise show none of it, which is the same reason `h4`..`h6`
+      inherit from the deepest level given.
+
+And two found while reading the above:
+
+- [ ] The Headings section says `# Heading` is emitted double-height, but
+      `heading_scale` does it for every heading up to level 2. `##` is drawn
+      large and the document does not say so.
+- [ ] Rasterizing flattens a heading to one string and one colour, taken from
+      the first span that has one, so inline styling inside a heading is lost on
+      exactly the terminals that get the bitmap. `` # See `config.toml` ``
+      renders the code span in its own colour under DECDHL and in the heading's
+      colour under kitty.
+
 ---
 
 ## Non-goals
