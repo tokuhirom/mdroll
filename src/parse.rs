@@ -112,27 +112,11 @@ impl<'t> Builder<'t> {
             }
 
             NodeValue::Paragraph => {
-                // A paragraph holding nothing but an image is a figure, not a
-                // sentence with a picture in it.
-                if let Some(only) = sole_child(node)
-                    && let NodeValue::Image(link) = &only.data.borrow().value
-                {
-                    let alt = collect_text(only);
-                    let id = ImageId(self.doc.images.len());
-                    self.doc.images.push(Image {
-                        url: link.url.clone(),
-                        alt: alt.clone(),
-                        size: None,
-                    });
-                    let mut block = Block::new(BlockKind::Image(id), range);
-                    block.spans = vec![Span::new(
-                        if alt.is_empty() {
-                            link.url.clone()
-                        } else {
-                            alt
-                        },
-                        self.theme.dim,
-                    )];
+                // A paragraph holding nothing but images is a figure — one
+                // picture, or a row of badges — not a sentence with a picture
+                // in it.
+                if let Some(images) = figure_images(node) {
+                    let block = self.figure_block(images, range, None);
                     self.push(block);
                     return;
                 }
@@ -420,31 +404,65 @@ impl<'t> Builder<'t> {
                 self.html_nodes(&rest, range, align);
             }
 
-            // A generic container: a picture on its own becomes a figure,
+            // A generic container: pictures on their own become a figure,
             // anything else is just its contents.
-            _ => match sole_image(&element.children) {
-                Some(img) => self.html_image_block(img, range, align),
+            _ => match contained_images(&element.children) {
+                Some(imgs) => {
+                    let images: Vec<(Image, Option<String>)> = imgs
+                        .iter()
+                        .map(|(img, href)| (html_image(img), href.map(str::to_string)))
+                        .collect();
+                    let block = self.figure_block(images, range.clone(), align);
+                    self.push(block);
+                }
                 None => self.html_nodes(&element.children, range, align),
             },
         }
     }
 
-    fn html_image_block(&mut self, img: &HtmlElement, range: &Range<usize>, align: Option<Align>) {
-        let url = img.attr("src").unwrap_or_default().to_string();
-        let alt = img.attr("alt").unwrap_or_default().to_string();
-        let id = ImageId(self.doc.images.len());
-        self.doc.images.push(Image {
-            url: url.clone(),
-            alt: alt.clone(),
-            size: None,
-        });
-        let mut block = Block::new(BlockKind::Image(id), range.clone());
-        block.spans = vec![Span::new(
-            if alt.is_empty() { url } else { alt },
-            self.theme.dim,
-        )];
+    /// A figure block from images, however they were written, each with
+    /// whatever it was linked to.
+    ///
+    /// The spans are the fallback: what shows when there are no graphics, or
+    /// while a download is still in flight. They carry the link too, so a badge
+    /// row is still a row of links on a terminal that cannot draw it.
+    fn figure_block(
+        &mut self,
+        images: Vec<(Image, Option<String>)>,
+        range: Range<usize>,
+        align: Option<Align>,
+    ) -> Block {
+        let mut ids = Vec::new();
+        let mut spans: Vec<Span> = Vec::new();
+        for (image, href) in images {
+            let link = href.map(|url| {
+                let id = LinkId(self.doc.links.len());
+                self.doc.links.push(Link {
+                    url,
+                    title: String::new(),
+                });
+                id
+            });
+            if !spans.is_empty() {
+                spans.push(Span::new("  ", self.theme.dim));
+            }
+            let label = if image.alt.is_empty() {
+                image.url.clone()
+            } else {
+                image.alt.clone()
+            };
+            let style = match link {
+                Some(_) => self.theme.link,
+                None => self.theme.dim,
+            };
+            spans.push(Span::new(label, style).with_link(link));
+            ids.push(ImageId(self.doc.images.len()));
+            self.doc.images.push(image.linking_to(link));
+        }
+        let mut block = Block::new(BlockKind::Images(ids), range);
+        block.spans = spans;
         block.align = align;
-        self.push(block);
+        block
     }
 
     fn html_table(&mut self, element: &HtmlElement, range: &Range<usize>) {
@@ -560,14 +578,13 @@ impl<'t> Builder<'t> {
                 unlink_edge_whitespace(out, before, style);
             }
             "img" => {
-                let url = element.attr("src").unwrap_or_default().to_string();
-                let alt = element.attr("alt").unwrap_or_default().to_string();
-                self.doc.images.push(Image {
-                    url: url.clone(),
-                    alt: alt.clone(),
-                    size: None,
-                });
-                let label = if alt.is_empty() { url } else { alt };
+                let image = html_image(element);
+                let label = if image.alt.is_empty() {
+                    image.url.clone()
+                } else {
+                    image.alt.clone()
+                };
+                self.doc.images.push(image);
                 if !label.is_empty() {
                     out.push(
                         Span::new(format!("[{label}]"), style.patch(theme.dim)).with_link(link),
@@ -806,11 +823,7 @@ impl<'t> Builder<'t> {
             }
             NodeValue::Image(target) => {
                 let alt = collect_text(node);
-                self.doc.images.push(Image {
-                    url: target.url.clone(),
-                    alt: alt.clone(),
-                    size: None,
-                });
+                self.doc.images.push(Image::new(&target.url, &alt));
                 let text = if alt.is_empty() {
                     target.url.clone()
                 } else {
@@ -856,14 +869,13 @@ impl<'t> Builder<'t> {
         match element.tag.as_str() {
             "br" => out.push(Span::new("\n", style)),
             "img" => {
-                let url = element.attr("src").unwrap_or_default().to_string();
-                let alt = element.attr("alt").unwrap_or_default().to_string();
-                self.doc.images.push(Image {
-                    url: url.clone(),
-                    alt: alt.clone(),
-                    size: None,
-                });
-                let label = if alt.is_empty() { url } else { alt };
+                let image = html_image(element);
+                let label = if image.alt.is_empty() {
+                    image.url.clone()
+                } else {
+                    image.alt.clone()
+                };
+                self.doc.images.push(image);
                 if !label.is_empty() {
                     out.push(
                         Span::new(format!("[{label}]"), style.patch(self.theme.dim))
@@ -1011,31 +1023,112 @@ fn collect_rows<'a>(element: &'a HtmlElement, out: &mut Vec<&'a HtmlElement>) {
     }
 }
 
-/// The single image a container holds, if that is all it holds.
+/// One `<img>` element, as an [`Image`].
+fn html_image(element: &HtmlElement) -> Image {
+    Image::new(
+        element.attr("src").unwrap_or_default(),
+        element.attr("alt").unwrap_or_default(),
+    )
+    .asked(px_attr(element, "width"), px_attr(element, "height"))
+}
+
+/// A `width=` or `height=` attribute, in pixels.
 ///
-/// A logo wrapped in a link inside a centred paragraph is still just a
-/// picture, and should be drawn as one.
-fn sole_image(nodes: &[HtmlNode]) -> Option<&HtmlElement> {
-    let mut found = None;
+/// Percentages and other relative units are dropped: in a terminal there is
+/// nothing sensible for them to be relative to.
+fn px_attr(element: &HtmlElement, name: &str) -> Option<u32> {
+    let raw = element.attr(name)?.trim();
+    if raw.ends_with('%') {
+        return None;
+    }
+    let digits: String = raw.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok().filter(|n| *n > 0)
+}
+
+/// The images a container holds, if that is all it holds.
+///
+/// A logo wrapped in a link inside a centred paragraph is still just a picture,
+/// and a row of linked badges is still just a row of pictures — both should be
+/// drawn rather than spelled out. A container with any prose in it is a
+/// paragraph, whatever else it also has.
+///
+/// Inside `<picture>`, the `<source>` alternatives are skipped: the `<img>` is
+/// the one every client is expected to be able to show.
+fn contained_images(nodes: &[HtmlNode]) -> Option<Vec<(&HtmlElement, Option<&str>)>> {
+    let mut found = Vec::new();
+    if !collect_images(nodes, None, &mut found) || found.is_empty() {
+        return None;
+    }
+    Some(found)
+}
+
+/// Each image, paired with the `href` of the nearest enclosing link.
+fn collect_images<'a>(
+    nodes: &'a [HtmlNode],
+    href: Option<&'a str>,
+    out: &mut Vec<(&'a HtmlElement, Option<&'a str>)>,
+) -> bool {
     for node in nodes {
         match node {
             HtmlNode::Text(text) if text.trim().is_empty() => {}
-            HtmlNode::Text(_) => return None,
+            HtmlNode::Text(_) => return false,
             HtmlNode::Element(e) => match e.tag.as_str() {
-                "img" if found.is_none() => found = Some(e),
+                "img" => out.push((e, href)),
                 "br" | "source" => {}
                 "a" | "p" | "div" | "picture" | "span" | "figure" => {
-                    let inner = sole_image(&e.children)?;
-                    if found.is_some() {
-                        return None;
+                    let inner = if e.tag == "a" { e.attr("href") } else { href };
+                    if !collect_images(&e.children, inner, out) {
+                        return false;
                     }
-                    found = Some(inner);
                 }
-                _ => return None,
+                _ => return false,
             },
         }
     }
-    found
+    true
+}
+
+/// The images a Markdown paragraph holds, if that is all it holds.
+///
+/// The badge row of a README is `[![alt](badge)](link)` several times over, so
+/// links are walked through; any real text means this is a sentence with a
+/// picture in it, which belongs in the flow instead.
+fn figure_images<'a>(node: &'a AstNode<'a>) -> Option<Vec<(Image, Option<String>)>> {
+    let mut found = Vec::new();
+    if !collect_figure_images(node, None, &mut found) || found.is_empty() {
+        return None;
+    }
+    Some(found)
+}
+
+/// Each image, paired with the target of the nearest enclosing link.
+fn collect_figure_images<'a>(
+    node: &'a AstNode<'a>,
+    href: Option<&str>,
+    out: &mut Vec<(Image, Option<String>)>,
+) -> bool {
+    for child in node.children() {
+        match &child.data.borrow().value {
+            NodeValue::Image(target) => out.push((
+                Image::new(&target.url, collect_text(child)),
+                href.map(str::to_string),
+            )),
+            NodeValue::Text(text) if text.trim().is_empty() => {}
+            NodeValue::SoftBreak | NodeValue::LineBreak => {}
+            NodeValue::Link(target) => {
+                if !collect_figure_images(child, Some(&target.url), out) {
+                    return false;
+                }
+            }
+            NodeValue::Emph | NodeValue::Strong => {
+                if !collect_figure_images(child, href, out) {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+    true
 }
 
 /// Collapse runs of whitespace, the way HTML does. Source indentation inside a
@@ -1113,12 +1206,6 @@ fn first_char<'a>(node: &'a AstNode<'a>) -> Option<char> {
         NodeValue::Code(code) => code.literal.chars().next(),
         _ => node.children().find_map(first_char),
     }
-}
-
-fn sole_child<'a>(node: &'a AstNode<'a>) -> Option<&'a AstNode<'a>> {
-    let mut it = node.children();
-    let first = it.next()?;
-    it.next().is_none().then_some(first)
 }
 
 fn collect_text<'a>(node: &'a AstNode<'a>) -> String {
@@ -1292,8 +1379,34 @@ mod tests {
     #[test]
     fn a_paragraph_that_is_only_an_image_becomes_an_image_block() {
         let d = doc("![alt text](pic.png)\n");
-        assert_eq!(d.blocks[0].kind, BlockKind::Image(ImageId(0)));
+        assert_eq!(d.blocks[0].kind, BlockKind::Images(vec![ImageId(0)]));
         assert_eq!(d.images[0].url, "pic.png");
+    }
+
+    #[test]
+    fn a_paragraph_of_nothing_but_images_becomes_one_figure() {
+        let d = doc("![one](a.png) ![two](b.png)\n");
+        assert_eq!(
+            d.blocks[0].kind,
+            BlockKind::Images(vec![ImageId(0), ImageId(1)])
+        );
+        assert_eq!(d.images[1].url, "b.png");
+    }
+
+    #[test]
+    fn a_markdown_badge_row_is_a_figure_even_through_its_links() {
+        let d = doc("[![Build](b.svg)](https://a.example) [![Docs](d.svg)](https://c.example)\n");
+        assert_eq!(
+            d.blocks[0].kind,
+            BlockKind::Images(vec![ImageId(0), ImageId(1)])
+        );
+    }
+
+    #[test]
+    fn a_sentence_with_a_picture_in_it_stays_a_paragraph() {
+        let d = doc("see ![alt text](pic.png) there\n");
+        assert_eq!(d.blocks[0].kind, BlockKind::Para);
+        assert!(d.blocks[0].text().contains("[alt text]"));
     }
 
     #[test]
@@ -1384,7 +1497,7 @@ mod tests {
     #[test]
     fn a_lone_html_image_becomes_a_figure() {
         let d = doc("<p align=\"center\"><img src=\"logo.png\" alt=\"Logo\"></p>\n");
-        assert_eq!(d.blocks[0].kind, BlockKind::Image(ImageId(0)));
+        assert_eq!(d.blocks[0].kind, BlockKind::Images(vec![ImageId(0)]));
         assert_eq!(d.images[0].url, "logo.png");
         assert_eq!(d.blocks[0].align, Some(Align::Center));
     }
@@ -1395,18 +1508,70 @@ mod tests {
             "<p align=\"center\"><a href=\"https://example.com\"><picture>\
              <source srcset=\"dark.svg\"><img alt=\"Dewy\" src=\"light.svg\"></picture></a></p>\n",
         );
-        assert_eq!(d.blocks[0].kind, BlockKind::Image(ImageId(0)));
+        assert_eq!(d.blocks[0].kind, BlockKind::Images(vec![ImageId(0)]));
         assert_eq!(d.images[0].url, "light.svg");
     }
 
     #[test]
-    fn a_badge_row_keeps_each_badge_separate() {
+    fn a_badge_row_becomes_one_figure_holding_every_badge() {
         let d = doc(
             "<p>\n  <a href=\"https://a.example\"><img alt=\"Build\" src=\"b.svg\"></a>\n\
              \x20 <a href=\"https://c.example\"><img alt=\"Release\" src=\"d.svg\"></a>\n</p>\n",
         );
-        assert_eq!(d.blocks[0].text(), "[Build] [Release]");
-        assert_eq!(d.links.len(), 2);
+        assert_eq!(
+            d.blocks[0].kind,
+            BlockKind::Images(vec![ImageId(0), ImageId(1)])
+        );
+        // The fallback, for a terminal with no graphics.
+        assert_eq!(d.blocks[0].text(), "Build  Release");
+    }
+
+    #[test]
+    fn a_badge_keeps_the_link_it_was_wrapped_in() {
+        let d = doc(
+            "<p>\n  <a href=\"https://a.example\"><img alt=\"Build\" src=\"b.svg\"></a>\n\
+             \x20 <a href=\"https://c.example\"><img alt=\"Release\" src=\"d.svg\"></a>\n</p>\n",
+        );
+        let targets: Vec<&str> = d
+            .images
+            .iter()
+            .map(|i| d.links[i.link.unwrap().0].url.as_str())
+            .collect();
+        assert_eq!(targets, ["https://a.example", "https://c.example"]);
+        // And the fallback text is still clickable where the picture would be.
+        assert!(d.blocks[0].spans.iter().any(|s| s.link == Some(LinkId(0))));
+    }
+
+    #[test]
+    fn a_markdown_badge_keeps_its_link_too() {
+        let d = doc("[![Build](b.svg)](https://a.example)\n");
+        let link = d.images[0].link.unwrap();
+        assert_eq!(d.links[link.0].url, "https://a.example");
+    }
+
+    #[test]
+    fn an_unlinked_figure_has_no_link_to_keep() {
+        let d = doc("![a picture](pic.png)\n");
+        assert!(d.images[0].link.is_none());
+        assert!(d.links.is_empty());
+    }
+
+    #[test]
+    fn an_img_width_is_carried_through_to_the_image() {
+        let d = doc("<p><img src=\"logo.svg\" alt=\"Logo\" width=\"240\"></p>\n");
+        assert_eq!(d.images[0].asked, (Some(240), None));
+    }
+
+    #[test]
+    fn relative_img_sizes_are_left_alone() {
+        let d = doc("<p><img src=\"logo.svg\" alt=\"Logo\" width=\"50%\" height=\"0\"></p>\n");
+        assert_eq!(d.images[0].asked, (None, None));
+    }
+
+    #[test]
+    fn a_container_with_prose_beside_an_image_is_not_a_figure() {
+        let d = doc("<p><img src=\"logo.png\" alt=\"Logo\"> and some words</p>\n");
+        assert_eq!(d.blocks[0].kind, BlockKind::Para);
     }
 
     #[test]

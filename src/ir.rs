@@ -111,11 +111,15 @@ pub struct Table {
 pub enum BlockKind {
     Heading(u8),
     Para,
-    Code { lang: Option<String> },
+    Code {
+        lang: Option<String>,
+    },
     Quote,
     List,
     Table,
-    Image(ImageId),
+    /// A figure: one image on its own, or a row of them, as a badge line is.
+    /// Never empty.
+    Images(Vec<ImageId>),
     Rule,
 }
 
@@ -195,10 +199,53 @@ pub struct Link {
 pub struct Image {
     pub url: String,
     pub alt: String,
-    /// Pixel dimensions, filled in after parsing by whoever can touch the disk.
-    /// Layout is pure, so it can only reserve rows for an image whose size is
-    /// already known.
+    /// Pixel dimensions to draw at, filled in after parsing by whoever can
+    /// touch the disk. Layout is pure, so it can only reserve rows for an image
+    /// whose size is already known.
     pub size: Option<(u32, u32)>,
+    /// The size the document asked for, from `<img width=… height=…>`. READMEs
+    /// use it to stop a logo drawn at 1300 pixels wide from filling the page.
+    pub asked: (Option<u32>, Option<u32>),
+    /// Where the picture was wrapped in a link. A badge is worth more as a way
+    /// to reach the build than as a picture of a build's state.
+    pub link: Option<LinkId>,
+}
+
+impl Image {
+    pub fn new(url: impl Into<String>, alt: impl Into<String>) -> Image {
+        Image {
+            url: url.into(),
+            alt: alt.into(),
+            size: None,
+            asked: (None, None),
+            link: None,
+        }
+    }
+
+    pub fn asked(mut self, width: Option<u32>, height: Option<u32>) -> Image {
+        self.asked = (width, height);
+        self
+    }
+
+    pub fn linking_to(mut self, link: Option<LinkId>) -> Image {
+        self.link = link;
+        self
+    }
+
+    /// Record the size the file turned out to be, honouring what the document
+    /// asked for.
+    ///
+    /// One dimension on its own scales the other with it, the way a browser
+    /// does; both together win outright, aspect ratio and all.
+    pub fn measured(&mut self, (w, h): (u32, u32)) {
+        let (w, h) = (w.max(1), h.max(1));
+        self.size = Some(match self.asked {
+            (Some(aw), Some(ah)) => (aw.max(1), ah.max(1)),
+            (Some(aw), None) => (aw.max(1), (h * aw.max(1)).div_ceil(w)),
+            (None, Some(ah)) => ((w * ah.max(1)).div_ceil(h), ah.max(1)),
+            (None, None) => (w, h),
+        });
+    }
 }
 
 /// A parsed document: blocks plus the side tables their spans point into.
@@ -335,6 +382,40 @@ mod tests {
             ..Style::PLAIN
         });
         assert_eq!(merged.fg, Some(Color::Red));
+    }
+
+    #[test]
+    fn an_image_with_no_asked_size_is_drawn_as_it_is() {
+        let mut image = Image::new("a.png", "");
+        image.measured((400, 200));
+        assert_eq!(image.size, Some((400, 200)));
+    }
+
+    #[test]
+    fn one_asked_dimension_scales_the_other_with_it() {
+        let mut image = Image::new("logo.svg", "").asked(Some(240), None);
+        image.measured((1200, 300));
+        assert_eq!(image.size, Some((240, 60)));
+
+        let mut image = Image::new("logo.svg", "").asked(None, Some(30));
+        image.measured((1200, 300));
+        assert_eq!(image.size, Some((120, 30)));
+    }
+
+    #[test]
+    fn asking_for_both_dimensions_wins_outright() {
+        let mut image = Image::new("logo.svg", "").asked(Some(100), Some(100));
+        image.measured((1200, 300));
+        assert_eq!(image.size, Some((100, 100)));
+    }
+
+    #[test]
+    fn a_degenerate_measurement_is_survivable() {
+        // Nothing should ever report a zero-sized image, but scaling one must
+        // not divide by zero if something does.
+        let mut image = Image::new("broken.svg", "").asked(Some(240), None);
+        image.measured((0, 0));
+        assert_eq!(image.size, Some((240, 240)));
     }
 
     #[test]

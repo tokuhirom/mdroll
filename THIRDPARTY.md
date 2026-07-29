@@ -28,5 +28,7 @@ $ cargo license
 
 The notable ones are [comrak](https://github.com/kivikakk/comrak) (BSD-2-Clause)
 for Markdown parsing, [syntect](https://github.com/trishume/syntect) (MIT) for
-code highlighting, and [crossterm](https://github.com/crossterm-rs/crossterm)
-(MIT) for terminal control.
+code highlighting, [crossterm](https://github.com/crossterm-rs/crossterm) (MIT)
+for terminal control, [resvg](https://github.com/linebender/resvg) (MPL-2.0) for
+rasterizing SVG, and [ureq](https://github.com/algesten/ureq) (MIT OR
+Apache-2.0) for fetching images over https.

@@ -20,6 +20,7 @@ comrak = { version = "0.54.0", default-features = false }
 crossterm = "0.29.0"
 dirs = "6.0.0"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
+resvg = "0.47.0"
 serde = { version = "1.0.229", features = ["derive"] }
 syntect = { version = "5.3.0", default-features = false, features = [
     "default-fancy",
@@ -27,8 +28,12 @@ syntect = { version = "5.3.0", default-features = false, features = [
 toml = "1.1.4"
 unicode-linebreak = "0.1.5"
 unicode-width = "0.2.2"
+ureq = "3.3.0"
 
 [profile.release]
 lto = true
 strip = true
 codegen-units = 1
+
+[target."cfg(unix)".dependencies]
+libc = "0.2.189"

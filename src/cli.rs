@@ -63,6 +63,16 @@ pub struct Cli {
     #[arg(long)]
     pub no_images: bool,
 
+    /// Never fetch images over the network; show their alt text instead.
+    #[arg(long)]
+    pub no_remote_images: bool,
+
+    /// Whether the terminal speaks the Kitty graphics protocol: auto, kitty,
+    /// or none. Detection reads variables the terminal sets, which do not
+    /// survive `ssh`; `kitty` says to draw anyway.
+    #[arg(long, value_name = "MODE")]
+    pub graphics: Option<String>,
+
     /// Plain output, no ANSI styling.
     #[arg(long)]
     pub no_color: bool,

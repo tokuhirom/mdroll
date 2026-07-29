@@ -119,9 +119,9 @@ impl<'a> Ctx<'a> {
             BlockKind::Rule => self.rule(idx, block),
             BlockKind::Code { .. } => self.code(idx, block),
             BlockKind::Table => self.table(idx, block),
-            BlockKind::Image(id) => {
-                let id = *id;
-                self.image(idx, block, id);
+            BlockKind::Images(ids) => {
+                let ids = ids.clone();
+                self.figure(idx, block, &ids);
             }
             BlockKind::Heading(level) => {
                 let level = *level;
@@ -222,11 +222,16 @@ impl<'a> Ctx<'a> {
 
     /// Leading spaces needed to align a row within the content width.
     fn alignment_pad(&self, block: &Block, piece: &[Span], width: usize) -> Option<usize> {
+        self.align_pad(block, self.width_of(piece), width)
+    }
+
+    /// The same, for content whose width is already known — a row of images has
+    /// no spans to measure.
+    fn align_pad(&self, block: &Block, used: usize, width: usize) -> Option<usize> {
         let align = block.align?;
         if align == Align::Left {
             return None;
         }
-        let used = self.width_of(piece);
         let slack = width.saturating_sub(used);
         Some(match align {
             Align::Center => slack / 2,
@@ -245,65 +250,116 @@ impl<'a> Ctx<'a> {
         (start + row).min(last)
     }
 
-    /// Reserve cells for an inline image and hang a hit rectangle off every
-    /// row it covers.
+    /// Reserve cells for a figure and hang a hit rectangle off every row it
+    /// covers.
     ///
     /// The hit carries the row's index *within* the image, which is what lets
     /// the renderer place a partially scrolled image cropped rather than
     /// dropping it.
-    fn image(&mut self, idx: usize, block: &Block, id: ImageId) {
-        if !self.image_rows(idx, block, id, true) {
-            // No graphics, or a remote or unreadable file: show the alt text.
+    fn figure(&mut self, idx: usize, block: &Block, ids: &[ImageId]) {
+        if !self.image_rows(idx, block, ids, true) {
+            // No graphics, or nothing readable to draw yet: show the alt text.
             self.flow(idx, block, Scale::Normal);
         }
     }
 
-    /// Lay out an image, returning false if it cannot be drawn at all.
-    fn image_rows(&mut self, idx: usize, block: &Block, id: ImageId, caption: bool) -> bool {
-        let size = self
-            .doc
-            .images
-            .get(id.0)
-            .and_then(|i| i.size)
-            .filter(|_| self.opts.images);
-        let Some(size) = size else {
-            return false;
-        };
+    /// Cells between two images on the same row, so a badge line does not read
+    /// as one wide picture.
+    const IMAGE_GAP: u16 = 1;
 
+    /// Lay images out side by side, wrapping when the row fills up. Returns
+    /// false if not one of them can be drawn.
+    fn image_rows(&mut self, idx: usize, block: &Block, ids: &[ImageId], caption: bool) -> bool {
+        if !self.opts.images {
+            return false;
+        }
         let width = self.content_width(block, Scale::Normal);
         // An image never takes more than two thirds of the screen, so there is
         // always some text left to orient by.
         let max_rows = ((self.view.rows as usize * 2) / 3).max(3);
-        let (cols, rows) = graphics::fit(size, self.opts.cell, width, max_rows);
-        let x = self.width_of(&self.lead_spans(block, false)) as u16;
-        let source = block.source_range.start;
-
-        for row in 0..rows {
-            let mut spans = self.lead_spans(block, row == 0);
-            // Reserved cells: the terminal paints the image over them.
-            spans.push(Span::plain(" ".repeat(cols as usize)));
-            let mut line = Line::new(source, idx, spans);
-            line.hits = vec![Hit {
-                rect: Rect {
-                    x,
-                    y: row,
-                    w: cols,
-                    h: rows,
-                },
-                target: HitTarget::Image(id),
-            }];
-            self.push(line);
+        // Whatever is measurable. An image still being fetched has no size yet,
+        // so it is left out and appears on a later layout, rather than holding
+        // up the ones that are ready.
+        let sized: Vec<(ImageId, u16, u16)> = ids
+            .iter()
+            .filter_map(|id| {
+                let size = self.doc.images.get(id.0)?.size?;
+                let (cols, rows) = graphics::fit(size, self.opts.cell, width, max_rows);
+                Some((*id, cols, rows))
+            })
+            .collect();
+        if sized.is_empty() {
+            return false;
         }
 
-        let alt = self
-            .doc
-            .images
-            .get(id.0)
-            .map(|i| i.alt.clone())
-            .unwrap_or_default();
+        let budget = width.min(u16::MAX as usize) as u16;
+        let source = block.source_range.start;
+        let mut first = true;
+        for group in pack(&sized, budget, Self::IMAGE_GAP) {
+            let used: u16 =
+                group.iter().map(|i| i.1).sum::<u16>() + Self::IMAGE_GAP * (group.len() as u16 - 1);
+            let pad = self
+                .align_pad(block, used as usize, width)
+                .unwrap_or_default();
+            // The tallest image sets the height; the rest are top-aligned,
+            // which is what keeps a row of same-size badges on one line.
+            let height = group.iter().map(|i| i.2).max().unwrap_or(1);
+
+            for row in 0..height {
+                let mut spans = self.lead_spans(block, first);
+                let mut x = self.width_of(&spans) as u16;
+                if pad > 0 {
+                    spans.push(Span::plain(" ".repeat(pad)));
+                    x += pad as u16;
+                }
+                let mut hits = Vec::new();
+                for (i, (id, cols, rows)) in group.iter().enumerate() {
+                    if i > 0 {
+                        spans.push(Span::plain(" ".repeat(Self::IMAGE_GAP as usize)));
+                        x += Self::IMAGE_GAP;
+                    }
+                    // Reserved cells: the terminal paints the image over them.
+                    spans.push(Span::plain(" ".repeat(*cols as usize)));
+                    // A shorter image has already ended by this row.
+                    if row < *rows {
+                        hits.push(Hit {
+                            rect: Rect {
+                                x,
+                                y: row,
+                                w: *cols,
+                                h: *rows,
+                            },
+                            target: HitTarget::Image(*id),
+                        });
+                    }
+                    x += cols;
+                }
+                let mut line = Line::new(source, idx, spans);
+                line.hits = hits;
+                self.push(line);
+                first = false;
+            }
+        }
+
+        // Only a lone image gets a caption. Stacking up the alt text of a badge
+        // row would say less than the badges do — and it is the figure's own
+        // count that decides, so a caption does not appear and vanish again as
+        // the rest of a row arrives.
+        let alt = match ids {
+            [id] => self
+                .doc
+                .images
+                .get(id.0)
+                .map(|i| i.alt.clone())
+                .unwrap_or_default(),
+            _ => String::new(),
+        };
         if caption && !alt.trim().is_empty() {
             let mut spans = self.lead_spans(block, false);
-            let (text, _) = self.calc().truncate(&alt, width);
+            let (text, used) = self.calc().truncate(&alt, width);
+            if let Some(pad) = self.align_pad(block, used, width) {
+                spans.push(Span::plain(" ".repeat(pad)));
+            }
             spans.push(Span::new(text, self.theme.dim));
             self.push(Line::new(source, idx, spans));
         }
@@ -368,7 +424,7 @@ impl<'a> Ctx<'a> {
         // A mermaid block rendered through mmdc displays as its picture but
         // stays a code block, so `yc` still yanks the diagram source.
         if let Some(id) = block.image
-            && self.image_rows(idx, block, id, false)
+            && self.image_rows(idx, block, &[id], false)
         {
             return;
         }
@@ -671,6 +727,34 @@ impl<'a> Ctx<'a> {
         }
         owner
     }
+}
+
+/// Break a row of images into as many lines as it takes to fit `budget`
+/// columns, with `gap` cells between neighbours.
+///
+/// An image too wide to share a line gets one to itself rather than being
+/// dropped; [`graphics::fit`] has already capped it at the budget, so it does
+/// fit on its own.
+fn pack(items: &[(ImageId, u16, u16)], budget: u16, gap: u16) -> Vec<Vec<(ImageId, u16, u16)>> {
+    let mut rows: Vec<Vec<(ImageId, u16, u16)>> = Vec::new();
+    let mut current: Vec<(ImageId, u16, u16)> = Vec::new();
+    let mut used = 0u16;
+    for item in items {
+        let needed = item
+            .1
+            .saturating_add(if current.is_empty() { 0 } else { gap });
+        if !current.is_empty() && used.saturating_add(needed) > budget {
+            rows.push(std::mem::take(&mut current));
+            used = item.1;
+        } else {
+            used = used.saturating_add(needed);
+        }
+        current.push(*item);
+    }
+    if !current.is_empty() {
+        rows.push(current);
+    }
+    rows
 }
 
 /// Box-drawing, block, and arrow characters, which diagrams paint in the
@@ -1050,6 +1134,114 @@ mod tests {
         let lines = layout(&doc, Viewport::new(80, 24), &Options::default(), &theme);
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].text(), "a picture");
+    }
+
+    /// A row of same-sized badges, each `size` pixels.
+    fn badge_doc(count: usize, size: (u32, u32)) -> (Document, Theme) {
+        let theme = Theme::default();
+        let source: String = (0..count)
+            .map(|i| format!("![badge {i}](b{i}.svg)"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut doc = parse(&format!("{source}\n"), &theme);
+        for image in &mut doc.images {
+            image.size = Some(size);
+        }
+        (doc, theme)
+    }
+
+    fn image_opts() -> Options {
+        Options {
+            images: true,
+            cell: CellSize { w: 10, h: 20 },
+            margin: 0,
+            ..Options::default()
+        }
+    }
+
+    #[test]
+    fn badges_share_a_row_until_it_fills_up() {
+        // 100x20px over 10x20px cells is 10x1 cells each, plus a gap: four fit
+        // in 44 columns, the fifth wraps.
+        let (doc, theme) = badge_doc(5, (100, 20));
+        let lines = layout(&doc, Viewport::new(44, 24), &image_opts(), &theme);
+        let rows: Vec<&Line> = lines.iter().filter(|l| !l.hits.is_empty()).collect();
+        assert_eq!(rows.len(), 2, "one row per line of badges");
+        assert_eq!(rows[0].hits.len(), 4);
+        assert_eq!(rows[1].hits.len(), 1);
+
+        // Side by side, each one gap apart, and each tagged as its own image.
+        let xs: Vec<u16> = rows[0].hits.iter().map(|h| h.rect.x).collect();
+        assert_eq!(xs, [0, 11, 22, 33]);
+        let targets: Vec<HitTarget> = rows[0].hits.iter().map(|h| h.target).collect();
+        assert_eq!(
+            targets,
+            [
+                HitTarget::Image(ImageId(0)),
+                HitTarget::Image(ImageId(1)),
+                HitTarget::Image(ImageId(2)),
+                HitTarget::Image(ImageId(3)),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_row_of_badges_is_as_tall_as_the_tallest_of_them() {
+        let (mut doc, theme) = badge_doc(2, (100, 20));
+        // One badge three cells tall next to one a single cell tall.
+        doc.images[0].size = Some((100, 60));
+        let lines = layout(&doc, Viewport::new(80, 24), &image_opts(), &theme);
+        let rows: Vec<&Line> = lines.iter().filter(|l| !l.hits.is_empty()).collect();
+        assert_eq!(rows.len(), 3);
+        // The short one is only on the first row; the tall one on all three.
+        assert_eq!(rows[0].hits.len(), 2);
+        assert_eq!(rows[1].hits.len(), 1);
+        assert_eq!(rows[1].hits[0].target, HitTarget::Image(ImageId(0)));
+        assert_eq!(
+            rows[1].hits[0].rect.y, 1,
+            "cropping starts at the right row"
+        );
+    }
+
+    #[test]
+    fn a_row_of_badges_gets_no_caption() {
+        let (doc, theme) = badge_doc(2, (100, 20));
+        let lines = layout(&doc, Viewport::new(80, 24), &image_opts(), &theme);
+        assert!(
+            !lines.iter().any(|l| l.text().contains("badge")),
+            "alt text belongs to a lone figure, not a badge row"
+        );
+    }
+
+    #[test]
+    fn a_centred_figure_is_padded_to_the_middle() {
+        let theme = Theme::default();
+        let mut doc = parse(
+            "<p align=\"center\"><img src=\"logo.png\" alt=\"Logo\"></p>\n",
+            &theme,
+        );
+        doc.images[0].size = Some((200, 20));
+        let lines = layout(&doc, Viewport::new(80, 24), &image_opts(), &theme);
+        let hit = lines.iter().find_map(|l| l.hits.first()).unwrap();
+        // 20 cells wide in 80 columns leaves 60 to split.
+        assert_eq!(hit.rect.x, 30);
+    }
+
+    #[test]
+    fn a_figure_whose_images_have_not_arrived_yet_shows_what_it_has() {
+        let (mut doc, theme) = badge_doc(3, (100, 20));
+        doc.images[1].size = None;
+        let lines = layout(&doc, Viewport::new(80, 24), &image_opts(), &theme);
+        let hits: Vec<HitTarget> = lines
+            .iter()
+            .flat_map(|l| &l.hits)
+            .map(|h| h.target)
+            .collect();
+        assert_eq!(
+            hits,
+            [HitTarget::Image(ImageId(0)), HitTarget::Image(ImageId(2))],
+            "a download still in flight must not hold up the others"
+        );
     }
 
     #[test]
