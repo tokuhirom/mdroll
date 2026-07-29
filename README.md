@@ -233,6 +233,18 @@ Links are also emitted as OSC 8 hyperlinks, so `Cmd`-click (macOS) or
 `Ctrl`-click opens them directly through the terminal without `mdroll` capturing
 the mouse.
 
+`?` is backward search, the pager meaning, because the whole of the navigation
+here is the pager's — `j`, `k`, `d`, `u`, `f`, `b`, `g`, `G`, `/`, `n`, `N` —
+and giving `?` to the help would leave `/` without its opposite. But `?` is what
+almost everything else opens help with, so the prompt it opens says `help: H`
+until the first character of a query is typed. The key it names is the one that
+is bound, not the one shipped, so rebinding `help` renames the hint too.
+
+A key bound to nothing says so — `x does nothing — H for help` — rather than
+being swallowed. Silence is what a viewer that has stopped responding looks
+like, and it is not an answer to the reader who has just discovered that a key
+they guessed at is not the key.
+
 ---
 
 ## Terminal support
@@ -1181,6 +1193,27 @@ the edges, and sometimes there is an edge in the picture that nobody wrote.
       its parent has it worse: its run is refused the cell outright and stops
       dead at the corner. The top-down bus states its junctions as directions
       and joins them; the sideways one has never been made to.
+
+### v1.8 — Finding the keys
+
+Everything in this document is discoverable by reading this document. Inside the
+viewer there is one key that tells you the rest, and nothing anywhere says which
+key it is: a reader who never reads the README is not told twice, they are not
+told once.
+
+- [x] `?`, which opens help nearly everywhere else, opens a backward search
+      prompt showing a bare `?` and no explanation. The keys are the pager's on
+      purpose and `?` should stay backward search, but the prompt is the exact
+      moment someone is asking for help and is the place to answer.
+- [x] An unbound key does nothing at all — no toast, no bell — so pressing one
+      is indistinguishable from a viewer that has stopped responding, and the
+      reader learns nothing about how to find out what would have worked.
+- [ ] `Ctrl-C` is bound to nothing, and raw mode means it arrives as a key
+      rather than as a signal, so the one key a reader reaches for when they
+      believe a terminal program has hung is the one that proves them right.
+      It now reports itself like any other unbound key, which says the viewer
+      is alive but answers a question nobody asked: someone pressing `Ctrl-C`
+      wants out, and should be told about `q` — or simply be let out.
 
 ---
 

@@ -248,6 +248,13 @@ impl Keymap {
     }
 }
 
+/// Name an event the way the help screen names a binding, so a key that did
+/// nothing can be reported as the reader pressed it.
+pub fn describe_key(key: &KeyEvent) -> String {
+    let (code, modifiers) = normalise(key.code, key.modifiers);
+    describe(code, modifiers)
+}
+
 fn describe(code: KeyCode, modifiers: KeyModifiers) -> String {
     let mut out = String::new();
     if modifiers.contains(KeyModifiers::CONTROL) {
