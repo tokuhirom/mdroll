@@ -302,6 +302,11 @@ Images behind an `http(s)` URL are fetched on worker threads and cached under
 alt text where the pictures will go, and each one replaces its text as it
 lands; a second look at the same document is instant and works offline.
 
+Entries are dropped a week after they were written, and fetched again the next
+time they are wanted. Time since *writing*, not since last use: a build badge
+that never expired would show the same state forever, and being a week out of
+date is the failure this is meant to bound.
+
 The cache is a record of which documents have been opened and what they pointed
 at, so on Unix it is kept to its owner: `~/.cache/mdroll` and everything under
 it are `0700`, and downloads land as `0600`. A directory left open by an older
@@ -752,7 +757,7 @@ issue tracker nobody reads.
       mode runs off the end of the content and into empty screens.
 - [x] `mmdc` is never found on Windows, where it is `mmdc.cmd`: the `PATH`
       search consults neither `PATHEXT` nor the executable bit.
-- [ ] Nothing ever expires from `~/.cache/mdroll`, so a badge whose image
+- [x] Nothing ever expires from `~/.cache/mdroll`, so a badge whose image
       changes stays pinned to the first version fetched, with no way to refresh
       it short of deleting the directory by hand.
 - [ ] A `$$...$$` block leaves a blank row above and below it.

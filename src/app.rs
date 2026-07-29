@@ -372,7 +372,7 @@ impl App {
     /// generation counter turns over.
     pub fn measure_images(&mut self) {
         self.generation = self.generation.wrapping_add(1);
-        crate::fetch::prepare();
+        crate::cache::prepare();
         let base = self
             .path
             .as_ref()

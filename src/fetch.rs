@@ -42,22 +42,6 @@ pub fn cached(url: &str) -> Option<PathBuf> {
     cache_path(url).filter(|path| path.is_file())
 }
 
-/// Narrow an image cache left behind by an earlier version, once per run.
-///
-/// [`fetch`] does this for itself, but a session that only reads what is
-/// already cached would never get there, and the point of the cache being
-/// owner-only is that it does not depend on fetching something new.
-pub fn prepare() {
-    static ONCE: OnceLock<()> = OnceLock::new();
-    ONCE.get_or_init(|| {
-        // Only when it is already there: a run that fetches nothing should not
-        // leave an empty directory behind.
-        if cache::dir("images").is_some_and(|dir| dir.is_dir()) {
-            let _ = cache::make_dir("images");
-        }
-    });
-}
-
 /// Download `url` into the cache and return the file it landed in.
 ///
 /// Blocking, so callers run it on a worker thread.
