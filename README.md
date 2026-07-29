@@ -728,6 +728,35 @@ Key specs are a single character, a name such as `Esc`, `Space`, `Tab`,
 - [x] comrak extensions GitHub does not have turned off, with tests pinning
       `__bold__` and single-tilde `~strikethrough~` to GitHub's reading
 
+### v1.2 — Corrections
+
+Known defects, found by reading the code against this document. Each one is
+small on its own; they are collected here so the list is somewhere other than an
+issue tracker nobody reads.
+
+- [ ] The contents pane draws its links against the *main* document's link
+      table, because the draw path checks only for the help pane and not for the
+      contents pane the way `active_doc` does. Ctrl-clicking an entry therefore
+      opens an unrelated URL. `o` and `F` take the other path and are correct.
+- [ ] Every link-picker label is placed at the column of the *first* link on its
+      row, so a badge row gets its labels stacked in one spot and only the last
+      one drawn is visible. The hit rectangles already carry the right column.
+- [ ] Only the first 26 links can be labelled, and the ones past that are not
+      mentioned, which reads as the picker having missed them.
+- [ ] `y` on its own does nothing: the yank needs `yy`, and the key after `y` is
+      swallowed. Both this README and the help pane document a bare `y`.
+- [ ] In-document anchor links — `[Terminal support](#terminal-support)`, which
+      this file itself uses — are handed to the system opener instead of jumping
+      to the heading. The contents pane already maps `#line-N` this way.
+- [ ] Horizontal scrolling has no right-hand bound, so holding `l` in no-wrap
+      mode runs off the end of the content and into empty screens.
+- [ ] `mmdc` is never found on Windows, where it is `mmdc.cmd`: the `PATH`
+      search consults neither `PATHEXT` nor the executable bit.
+- [ ] Nothing ever expires from `~/.cache/mdroll`, so a badge whose image
+      changes stays pinned to the first version fetched, with no way to refresh
+      it short of deleting the directory by hand.
+- [ ] A `$$...$$` block leaves a blank row above and below it.
+
 ### Beyond
 
 - YAML front matter drawn as a table, the way GitHub shows it, rather than as a
