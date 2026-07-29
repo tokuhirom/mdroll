@@ -93,10 +93,10 @@ $ cargo build --release
 ```
 
 Prebuilt binaries are attached to each
-[release](https://github.com/tokuhirom/mdroll/releases): macOS on Intel and
-Apple silicon, Linux on x86-64 and arm64 (statically linked against musl, so
-there is no glibc version to match), and Windows on x86-64. `mise` picks the
-right one for your machine automatically.
+[release](https://github.com/tokuhirom/mdroll/releases): macOS on Apple
+silicon, Linux on x86-64 and arm64 (statically linked against musl, so there is
+no glibc version to match), and Windows on x86-64. `mise` picks the right one
+for your machine automatically. Intel Macs build from source.
 
 ---
 
