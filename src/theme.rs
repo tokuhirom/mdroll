@@ -364,8 +364,24 @@ pub fn available_names() -> Vec<String> {
     names
 }
 
-/// Load a theme by name, preferring a user theme over a bundled one.
+/// Whether a `--theme` argument names a file rather than a theme.
+///
+/// A theme being written lives wherever it is being written, and having to
+/// install it into the config directory before it can be looked at makes for a
+/// slow loop. Nothing is ambiguous: a theme *name* is a file stem, so it can
+/// carry neither a separator nor a `.toml` extension.
+fn looks_like_path(name: &str) -> bool {
+    name.contains('/')
+        || name.contains(std::path::MAIN_SEPARATOR)
+        || Path::new(name).extension().is_some_and(|e| e == "toml")
+}
+
+/// Load a theme by name, preferring a user theme over a bundled one, or read
+/// one straight from a path.
 pub fn load(name: &str) -> Result<Theme> {
+    if looks_like_path(name) {
+        return load_path(Path::new(name));
+    }
     if let Some(dir) = user_theme_dir() {
         let path = dir.join(format!("{name}.toml"));
         if path.is_file() {
@@ -442,6 +458,32 @@ mod tests {
         )
         .unwrap();
         assert_eq!(theme.heading(1).fg, theme.heading(6).fg);
+    }
+
+    #[test]
+    fn a_theme_argument_naming_a_file_is_read_from_that_file() {
+        let path = std::env::temp_dir().join(format!("mdroll-theme-{}.toml", std::process::id()));
+        std::fs::write(
+            &path,
+            "name = \"scratch\"\n[heading]\nh1 = { fg = \"#ff0000\" }\n",
+        )
+        .unwrap();
+        let theme = load(path.to_str().unwrap()).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(theme.name, "scratch");
+        assert_eq!(theme.heading(1).fg, Some(Color::Rgb { r: 255, g: 0, b: 0 }));
+    }
+
+    #[test]
+    fn a_bare_name_is_still_looked_up_rather_than_opened() {
+        // No bundled name carries a separator or an extension, so the two
+        // cases never overlap; a name that is not a theme must say so rather
+        // than report a missing file.
+        assert!(!looks_like_path("dracula"));
+        assert!(looks_like_path("dracula.toml"));
+        assert!(looks_like_path("./dracula"));
+        let err = format!("{:#}", load("no-such-theme").unwrap_err());
+        assert!(err.contains("unknown theme"), "{err}");
     }
 
     #[test]

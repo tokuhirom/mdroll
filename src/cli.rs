@@ -15,8 +15,9 @@ pub struct Cli {
     /// Markdown file to view. Reads stdin when piped, browses *.md otherwise.
     pub file: Option<PathBuf>,
 
-    /// Color theme. Default: `terminal`, which uses your terminal's own colors.
-    #[arg(long, value_name = "NAME")]
+    /// Color theme, by name or by path to a .toml file. Default: `terminal`,
+    /// which uses your terminal's own colors.
+    #[arg(long, value_name = "NAME|PATH")]
     pub theme: Option<String>,
 
     /// Print available theme names and exit.

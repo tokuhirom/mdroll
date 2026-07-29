@@ -123,7 +123,7 @@ on a terminal.
 
 | Option | Description |
 | --- | --- |
-| `--theme <NAME>` | Color theme. Default: `terminal` (uses your terminal's own colors). |
+| `--theme <NAME\|PATH>` | Color theme, by name or by path to a `.toml` file. Default: `terminal` (uses your terminal's own colors). |
 | `--list-themes` | Print available theme names and exit. |
 | `--wrap` / `--no-wrap` | Start in reflow or horizontal-scroll mode. |
 | `--source` | Start in source view instead of rendered view. |
@@ -873,7 +873,7 @@ theme file that is not yet installed, no way to find out which keys exist
 without the repository checked out, and no way for a theme to say anything about
 a heading beyond its colour.
 
-- [ ] `--theme` takes a name and nothing else, so `theme::load_path` cannot be
+- [x] `--theme` takes a name and nothing else, so `theme::load_path` cannot be
       reached from the command line and a theme being written has to be copied
       into the config directory before it can be looked at.
 - [ ] No way to see a theme's keys from an installed binary. `themes/*.toml` are
