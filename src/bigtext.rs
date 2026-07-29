@@ -99,6 +99,18 @@ impl HeadingDecor {
     }
 }
 
+/// A stretch of a heading drawn in one color.
+///
+/// A heading is not one color. `# See `config.toml`` has a code span in it, and
+/// under DECDHL that span keeps the colour the theme gives it, because the
+/// terminal is drawing styled text. Handing the rasterizer a single string and
+/// a single colour threw that away on exactly the terminals that get a bitmap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Run<'a> {
+    pub text: &'a str,
+    pub color: (u8, u8, u8),
+}
+
 /// Paint a solid rectangle, clipped to the canvas.
 ///
 /// Decoration is drawn over whatever is already there rather than blended with
@@ -207,15 +219,14 @@ impl Renderer {
         (&self.fonts[0], self.fonts[0].glyph_id(c))
     }
 
-    /// Draw `text` into an RGBA bitmap `cols` by `rows` cells in size.
+    /// Draw `runs` into an RGBA bitmap `cols` by `rows` cells in size.
     ///
     /// The background stays transparent so the terminal's own background, and
     /// any image behind it, shows through — the same reason the `terminal`
     /// theme paints no background of its own.
     pub fn render(
         &self,
-        text: &str,
-        color: (u8, u8, u8),
+        runs: &[Run<'_>],
         cols: u16,
         rows: u16,
         cell: CellSize,
@@ -223,7 +234,7 @@ impl Renderer {
     ) -> Option<Vec<u8>> {
         let width = cols as u32 * cell.w as u32;
         let height = rows as u32 * cell.h as u32;
-        if width == 0 || height == 0 || text.trim().is_empty() {
+        if width == 0 || height == 0 || runs.iter().all(|r| r.text.trim().is_empty()) {
             return None;
         }
 
@@ -244,44 +255,47 @@ impl Renderer {
         let mut text_start: Option<f32> = None;
         let mut text_end = 0.0f32;
 
-        for c in text.chars() {
-            if !c.is_whitespace() {
-                text_start.get_or_insert(pen);
-            }
-            let (font, id) = self.pick(c);
-            let scaled = font.as_scaled(PxScale::from(px));
-            if let Some(prev) = previous {
-                pen += scaled.kern(prev, id);
-            }
-            previous = Some(id);
+        'runs: for run in runs {
+            let color = run.color;
+            for c in run.text.chars() {
+                if !c.is_whitespace() {
+                    text_start.get_or_insert(pen);
+                }
+                let (font, id) = self.pick(c);
+                let scaled = font.as_scaled(PxScale::from(px));
+                if let Some(prev) = previous {
+                    pen += scaled.kern(prev, id);
+                }
+                previous = Some(id);
 
-            let glyph =
-                id.with_scale_and_position(PxScale::from(px), ab_glyph::point(pen, baseline));
-            if let Some(outline) = font.outline_glyph(glyph) {
-                let bounds = outline.px_bounds();
-                outline.draw(|gx, gy, coverage| {
-                    let x = bounds.min.x as i32 + gx as i32;
-                    let y = bounds.min.y as i32 + gy as i32;
-                    if x < 0 || y < 0 || x as u32 >= width || y as u32 >= height {
-                        return;
-                    }
-                    let i = ((y as u32 * width + x as u32) * 4) as usize;
-                    let alpha = (coverage * 255.0).clamp(0.0, 255.0) as u8;
-                    // Glyphs may overlap; keep the strongest coverage.
-                    if alpha > canvas[i + 3] {
-                        canvas[i] = color.0;
-                        canvas[i + 1] = color.1;
-                        canvas[i + 2] = color.2;
-                        canvas[i + 3] = alpha;
-                    }
-                });
-            }
-            pen += scaled.h_advance(id);
-            if !c.is_whitespace() {
-                text_end = pen;
-            }
-            if pen > width as f32 {
-                break;
+                let glyph =
+                    id.with_scale_and_position(PxScale::from(px), ab_glyph::point(pen, baseline));
+                if let Some(outline) = font.outline_glyph(glyph) {
+                    let bounds = outline.px_bounds();
+                    outline.draw(|gx, gy, coverage| {
+                        let x = bounds.min.x as i32 + gx as i32;
+                        let y = bounds.min.y as i32 + gy as i32;
+                        if x < 0 || y < 0 || x as u32 >= width || y as u32 >= height {
+                            return;
+                        }
+                        let i = ((y as u32 * width + x as u32) * 4) as usize;
+                        let alpha = (coverage * 255.0).clamp(0.0, 255.0) as u8;
+                        // Glyphs may overlap; keep the strongest coverage.
+                        if alpha > canvas[i + 3] {
+                            canvas[i] = color.0;
+                            canvas[i + 1] = color.1;
+                            canvas[i + 2] = color.2;
+                            canvas[i + 3] = alpha;
+                        }
+                    });
+                }
+                pen += scaled.h_advance(id);
+                if !c.is_whitespace() {
+                    text_end = pen;
+                }
+                if pen > width as f32 {
+                    break 'runs;
+                }
             }
         }
 
@@ -326,7 +340,16 @@ mod tests {
             return;
         };
         let png = renderer
-            .render("Heading", (255, 0, 0), 20, 2, CELL, HeadingDecor::default())
+            .render(
+                &[Run {
+                    text: "Heading",
+                    color: (255, 0, 0),
+                }],
+                20,
+                2,
+                CELL,
+                HeadingDecor::default(),
+            )
             .unwrap();
         assert_eq!(&png[..4], b"\x89PNG");
         let decoded = image::load_from_memory(&png).unwrap();
@@ -340,7 +363,16 @@ mod tests {
             return;
         };
         let png = renderer
-            .render("I", (255, 255, 255), 10, 2, CELL, HeadingDecor::default())
+            .render(
+                &[Run {
+                    text: "I",
+                    color: (255, 255, 255),
+                }],
+                10,
+                2,
+                CELL,
+                HeadingDecor::default(),
+            )
             .unwrap();
         let image = image::load_from_memory(&png).unwrap().to_rgba8();
         // The bottom-right corner is well clear of a single narrow glyph.
@@ -354,7 +386,16 @@ mod tests {
             return;
         };
         let png = renderer
-            .render("HHHH", (10, 200, 30), 12, 2, CELL, HeadingDecor::default())
+            .render(
+                &[Run {
+                    text: "HHHH",
+                    color: (10, 200, 30),
+                }],
+                12,
+                2,
+                CELL,
+                HeadingDecor::default(),
+            )
             .unwrap();
         let image = image::load_from_memory(&png).unwrap().to_rgba8();
         let painted = image
@@ -373,8 +414,10 @@ mod tests {
         // bitmap comes out blank.
         let png = renderer
             .render(
-                "日本語の見出し",
-                (255, 255, 255),
+                &[Run {
+                    text: "日本語の見出し",
+                    color: (255, 255, 255),
+                }],
                 30,
                 2,
                 CELL,
@@ -396,8 +439,10 @@ mod tests {
         };
         let latin = renderer
             .render(
-                "Heading",
-                (255, 255, 255),
+                &[Run {
+                    text: "Heading",
+                    color: (255, 255, 255),
+                }],
                 30,
                 2,
                 CELL,
@@ -406,8 +451,10 @@ mod tests {
             .unwrap();
         let mixed = renderer
             .render(
-                "Heading 見出し",
-                (255, 255, 255),
+                &[Run {
+                    text: "Heading 見出し",
+                    color: (255, 255, 255),
+                }],
                 30,
                 2,
                 CELL,
@@ -445,7 +492,16 @@ mod tests {
     /// starts is not `margin * cell.w` and cannot be predicted from the string.
     fn text_left(renderer: &Renderer, text: &str) -> u32 {
         let png = renderer
-            .render(text, (255, 255, 255), 40, 2, CELL, HeadingDecor::default())
+            .render(
+                &[Run {
+                    text,
+                    color: (255, 255, 255),
+                }],
+                40,
+                2,
+                CELL,
+                HeadingDecor::default(),
+            )
             .unwrap();
         decoded(&png)
             .enumerate_pixels()
@@ -458,8 +514,10 @@ mod tests {
     fn border_pixels(renderer: &Renderer, text: &str) -> Vec<(u32, u32)> {
         let png = renderer
             .render(
-                text,
-                (255, 255, 255),
+                &[Run {
+                    text,
+                    color: (255, 255, 255),
+                }],
                 40,
                 2,
                 CELL,
@@ -512,8 +570,10 @@ mod tests {
         let text = "        Heading";
         let png = renderer
             .render(
-                text,
-                (255, 255, 255),
+                &[Run {
+                    text,
+                    color: (255, 255, 255),
+                }],
                 40,
                 2,
                 CELL,
@@ -542,8 +602,10 @@ mod tests {
         // option that does not draw over the first glyph.
         let png = renderer
             .render(
-                "Heading",
-                (255, 255, 255),
+                &[Run {
+                    text: "Heading",
+                    color: (255, 255, 255),
+                }],
                 40,
                 2,
                 CELL,
@@ -567,8 +629,10 @@ mod tests {
         };
         let png = renderer
             .render(
-                "  Hi",
-                (255, 255, 255),
+                &[Run {
+                    text: "  Hi",
+                    color: (255, 255, 255),
+                }],
                 40,
                 2,
                 CELL,
@@ -585,18 +649,107 @@ mod tests {
     }
 
     #[test]
+    fn each_run_is_drawn_in_its_own_colour() {
+        let Some(renderer) = renderer() else {
+            return;
+        };
+        // `# See `config.toml`` is the case: the code span keeps the colour the
+        // theme gives it under DECDHL, and used to lose it under kitty because
+        // the whole heading was flattened to the first colour found.
+        let png = renderer
+            .render(
+                &[
+                    Run {
+                        text: "See ",
+                        color: (255, 0, 0),
+                    },
+                    Run {
+                        text: "config",
+                        color: (0, 255, 0),
+                    },
+                ],
+                40,
+                2,
+                CELL,
+                HeadingDecor::default(),
+            )
+            .unwrap();
+        let image = decoded(&png);
+        let red = pixels_of(&image, [255, 0, 0, 255]);
+        let green = pixels_of(&image, [0, 255, 0, 255]);
+        assert!(!red.is_empty(), "the first run lost its colour");
+        assert!(!green.is_empty(), "the second run lost its colour");
+        // And they are drawn where their run sits, not interleaved.
+        let red_right = red.iter().map(|(x, _)| *x).max().unwrap();
+        let green_left = green.iter().map(|(x, _)| *x).min().unwrap();
+        assert!(
+            red_right < green_left,
+            "runs overlap: red ends at {red_right}, green starts at {green_left}"
+        );
+    }
+
+    #[test]
+    fn a_run_wide_enough_to_fill_the_canvas_stops_the_ones_after_it() {
+        let Some(renderer) = renderer() else {
+            return;
+        };
+        // Clipping has to end the whole heading, not just the run it happened
+        // in, or the tail would be drawn back at the left of the next run.
+        let png = renderer
+            .render(
+                &[
+                    Run {
+                        text: &"wide ".repeat(50),
+                        color: (255, 255, 255),
+                    },
+                    Run {
+                        text: "tail",
+                        color: (0, 255, 0),
+                    },
+                ],
+                10,
+                2,
+                CELL,
+                HeadingDecor::default(),
+            )
+            .unwrap();
+        assert!(
+            pixels_of(&decoded(&png), [0, 255, 0, 255]).is_empty(),
+            "a run past the right edge was drawn anyway"
+        );
+    }
+
+    #[test]
     fn empty_text_renders_nothing() {
         let Some(renderer) = renderer() else {
             return;
         };
         assert!(
             renderer
-                .render("   ", (0, 0, 0), 10, 2, CELL, HeadingDecor::default())
+                .render(
+                    &[Run {
+                        text: "   ",
+                        color: (0, 0, 0)
+                    }],
+                    10,
+                    2,
+                    CELL,
+                    HeadingDecor::default()
+                )
                 .is_none()
         );
         assert!(
             renderer
-                .render("x", (0, 0, 0), 0, 2, CELL, HeadingDecor::default())
+                .render(
+                    &[Run {
+                        text: "x",
+                        color: (0, 0, 0)
+                    }],
+                    0,
+                    2,
+                    CELL,
+                    HeadingDecor::default()
+                )
                 .is_none()
         );
     }
@@ -608,8 +761,10 @@ mod tests {
         };
         let png = renderer
             .render(
-                &"wide ".repeat(50),
-                (255, 255, 255),
+                &[Run {
+                    text: &"wide ".repeat(50),
+                    color: (255, 255, 255),
+                }],
                 10,
                 2,
                 CELL,

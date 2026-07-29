@@ -19,7 +19,7 @@
 //! row is padded out to the full width instead, which erases exactly as well
 //! and leaves the images alone.
 
-use crate::bigtext::HeadingDecor;
+use crate::bigtext::{HeadingDecor, Run as HeadingRun};
 use crate::graphics::ImageStore;
 use crate::ir::{Color, Hit, HitTarget, Line, Link, Rect, Scale, Span, Style};
 use crate::screen::Screen;
@@ -258,12 +258,15 @@ impl Renderer {
         // The layout halved the column budget for this row, so the bitmap gets
         // twice the columns the text would occupy at normal size.
         let cols = ((self.calc.str(trimmed) * 2) as u16).min(frame.screen.cols);
+        // The heading's own colour, which spans without one of their own take,
+        // and which the decoration is derived from.
         let color = line
             .spans
             .iter()
             .find_map(|s| s.style.fg)
             .and_then(rgb_of)
             .unwrap_or((200, 200, 200));
+        let runs = heading_runs(line, trimmed.len(), color);
 
         let decor = heading_decor(frame.theme, line.heading, color);
 
@@ -271,7 +274,7 @@ impl Renderer {
             self.blank_row(out, frame, y + row)?;
         }
         queue!(out, MoveTo(0, y))?;
-        if images.place_text(out, trimmed, color, cols, 2, decor)? {
+        if images.place_text(out, &runs, cols, 2, decor)? {
             return Ok(());
         }
         let mut placement = Placement::default();
@@ -592,6 +595,36 @@ fn dimmed(color: (u8, u8, u8)) -> (u8, u8, u8) {
     (scale(color.0), scale(color.1), scale(color.2))
 }
 
+/// A heading's spans as coloured runs, cut off at `len` bytes.
+///
+/// `len` is the length of the row with its trailing blank removed. Trimming has
+/// to happen here rather than on the joined string, because the spans are what
+/// is drawn now and a run of trailing spaces would otherwise push the rule that
+/// follows the text out past the last letter.
+///
+/// A span with no colour of its own takes the heading's, so a heading that
+/// names no colour at all comes out in one colour as before.
+fn heading_runs(line: &Line, len: usize, color: (u8, u8, u8)) -> Vec<HeadingRun<'_>> {
+    let mut runs = Vec::new();
+    let mut at = 0usize;
+    for span in &line.spans {
+        if at >= len {
+            break;
+        }
+        let end = (at + span.text.len()).min(len);
+        let text = &span.text[..end - at];
+        at += span.text.len();
+        if text.is_empty() {
+            continue;
+        }
+        runs.push(HeadingRun {
+            text,
+            color: span.style.fg.and_then(rgb_of).unwrap_or(color),
+        });
+    }
+    runs
+}
+
 /// What to draw around a heading of this level, in the color it resolves to.
 ///
 /// A row that is not a heading gets nothing. A level the theme says nothing
@@ -654,6 +687,64 @@ pub fn rgb_to_ansi256(r: u8, g: u8, b: u8) -> u8 {
 mod tests {
     use super::*;
     use crate::ir::LinkId;
+
+    #[test]
+    fn a_heading_keeps_the_colour_of_each_span_inside_it() {
+        // `# See `config.toml``: the code span has a colour of its own and the
+        // words around it do not. Flattening the row to the first colour found
+        // lost the code span on exactly the terminals that get a bitmap.
+        let heading = Color::Rgb {
+            r: 189,
+            g: 147,
+            b: 249,
+        };
+        let code = Color::Rgb {
+            r: 255,
+            g: 121,
+            b: 198,
+        };
+        let mut line = Line::new(
+            1,
+            0,
+            vec![
+                Span::new("See ", Style::fg(heading)),
+                Span::new("config.toml", Style::fg(code)),
+            ],
+        );
+        line.heading = Some(1);
+        let runs = heading_runs(&line, line.text().trim_end().len(), (189, 147, 249));
+        assert_eq!(runs.len(), 2, "{runs:?}");
+        assert_eq!(runs[0].color, (189, 147, 249));
+        assert_eq!(runs[1].color, (255, 121, 198));
+    }
+
+    #[test]
+    fn a_span_with_no_colour_of_its_own_takes_the_headings() {
+        let mut line = Line::new(
+            1,
+            0,
+            vec![
+                Span::plain("  "),
+                Span::new("Title", Style::fg(Color::Rgb { r: 1, g: 2, b: 3 })),
+            ],
+        );
+        line.heading = Some(2);
+        let runs = heading_runs(&line, line.text().trim_end().len(), (9, 9, 9));
+        assert_eq!(runs[0].color, (9, 9, 9), "the margin took a colour");
+        assert_eq!(runs[1].color, (1, 2, 3));
+    }
+
+    #[test]
+    fn trailing_blank_is_cut_from_the_runs_rather_than_the_joined_string() {
+        // The rule under a heading is drawn to where the glyphs end. A run of
+        // trailing spaces the layout padded with would push it out past the
+        // last letter, so the trim has to reach the spans themselves.
+        let mut line = Line::new(1, 0, vec![Span::plain("Title"), Span::plain("      ")]);
+        line.heading = Some(1);
+        let runs = heading_runs(&line, line.text().trim_end().len(), (9, 9, 9));
+        assert_eq!(runs.len(), 1, "{runs:?}");
+        assert_eq!(runs[0].text, "Title");
+    }
 
     fn strip_ansi(bytes: &[u8]) -> String {
         let text = String::from_utf8_lossy(bytes);

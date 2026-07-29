@@ -1017,11 +1017,16 @@ And two found while reading the above:
       anywhere to put them. `h3 = { bar = true }` parses, resolves, and draws
       nothing. Either the levels below the cutoff grow a text decoration that
       costs a row, or the key is refused where it cannot be honoured.
-- [ ] Rasterizing flattens a heading to one string and one colour, taken from
+- [x] Rasterizing flattens a heading to one string and one colour, taken from
       the first span that has one, so inline styling inside a heading is lost on
       exactly the terminals that get the bitmap. `` # See `config.toml` ``
       renders the code span in its own colour under DECDHL and in the heading's
       colour under kitty.
+- [ ] A span's *background* still does not survive rasterizing. A code span in a
+      heading has one — `code = { bg = "#44475a" }` in Dracula — and the bitmap
+      draws foregrounds onto a transparent canvas, so under DECDHL the span sits
+      in a box and under kitty it does not. Smaller than the colour was, and the
+      same shape of problem.
 
 ---
 
