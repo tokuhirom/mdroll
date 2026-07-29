@@ -836,7 +836,7 @@ that declining beats drawing something subtly wrong.
       every later frame re-reads the file, rescales it, re-encodes a PNG, and
       re-transmits it — for as long as the image stays on screen.
 
-Two more, found while fixing those rather than by reading:
+Three more, found while fixing those rather than by reading:
 
 - [x] Edge labels are drawn only by the fan that hangs a parent's children off
       one bus, which is the only place that has them. A `flowchart LR` drops
@@ -845,6 +845,11 @@ Two more, found while fixing those rather than by reading:
 - [ ] Where two parents meet at one child, each draws the junction under that
       child for itself, so the second overwrites the first: `└─────┌────┘`,
       with a corner where the column that carries on downwards wants a `┬`.
+- [ ] Two labelled edges that meet at one node write their labels in the same
+      place, so the second is drawn over the first: `A -->|from a| C` beside
+      `B -->|from b| C` reads `from bm a`. A label goes to the end of its edge
+      where a fan's edges are each on a row of their own, and at a join it is
+      the other end that is.
 
 ---
 
