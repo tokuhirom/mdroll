@@ -586,52 +586,35 @@ pub fn draw_flowchart(chart: &Flowchart, calc: &WidthCalc) -> Option<Vec<String>
     // today. Reordering a rank is a repair for a band whose runs would say
     // more than the document does, not a policy applied to every chart.
     let mut diverted: Vec<usize> = Vec::new();
-    let honest = |order: &[Vec<usize>], out: &[usize]| {
+    // What a drawing has to say, and the two things worth paying for to have it
+    // say more. A run that leaves along its box's own row is shorter and turns
+    // less than one that has to leave into the band, and a band whose labels can
+    // be told apart costs whatever the edges taken off it cost — so an order
+    // that has both is preferred to one that has either, and either to neither.
+    let gate = |order: &[Vec<usize>], out: &[usize], short: bool, labels: bool| {
         let centres = across(order);
         bus_runs_are_honest(chart, &rank, out, |i| centres[i])
+            && (!short || roads_out_are_clear(chart, &rank, order, out))
+            && (!labels || labels_are_told_apart(chart, &rank, out))
     };
-    // A run that leaves along its box's own row is shorter and turns less than
-    // one that has to drop into the band to get out, so an order that gives
-    // every routed edge the short road is preferred to one that does not.
-    let short = |order: &[Vec<usize>], out: &[usize]| {
-        honest(order, out) && roads_out_are_clear(chart, &rank, order, out)
-    };
-    if !short(&by_rank, &diverted) {
+    if !gate(&by_rank, &diverted, true, true) {
         let orders = untangled(chart, &rank, &by_rank);
-        // A plain drawing beats a routed one, so every order is tried on its
-        // own before any of them is allowed to send an edge round the outside,
-        // and the short road is asked for in both before the long one is taken
-        // in either.
-        let routed_round = |clear: bool| {
-            orders.iter().find_map(|order| {
-                // Nothing is taken out of a band that can say what it carries:
-                // an edge routed round costs a lane and a road, and the band it
-                // came off says no more for having lost it.
-                if honest(order, &[]) {
-                    return None;
-                }
-                let centres = across(order);
-                let out = divert(chart, &rank, order, &centres, clear)?;
-                let ok = if clear {
-                    short(order, &out)
-                } else {
-                    honest(order, &out)
-                };
-                ok.then(|| (order.clone(), out))
-            })
-        };
-        let found = orders
-            .iter()
-            .find(|order| short(order, &[]))
-            .map(|order| (order.clone(), Vec::new()))
-            .or_else(|| routed_round(true))
-            .or_else(|| {
+        // A plain drawing beats a routed one, so every order is tried on its own
+        // before any of them is allowed to send an edge round the outside.
+        let found = [(true, true), (false, true), (true, false), (false, false)]
+            .into_iter()
+            .find_map(|(short, labels)| {
                 orders
                     .iter()
-                    .find(|order| honest(order, &[]))
+                    .find(|order| gate(order, &[], short, labels))
                     .map(|order| (order.clone(), Vec::new()))
-            })
-            .or_else(|| routed_round(false))?;
+                    .or_else(|| {
+                        orders.iter().find_map(|order| {
+                            let out = divert(chart, &rank, |out| gate(order, out, short, labels))?;
+                            Some((order.clone(), out))
+                        })
+                    })
+            })?;
         (by_rank, diverted) = found;
     }
 
@@ -650,22 +633,16 @@ pub fn draw_flowchart(chart: &Flowchart, calc: &WidthCalc) -> Option<Vec<String>
 /// a rank already is, it leaves a band the remaining edges can say honestly and
 /// carries its own label where nothing else can reach it.
 ///
-/// The fewest edges that do it, and among those the ones that break up the
-/// fewest fans: a parent with one edge in the band loses nothing by having it
-/// routed round, and a parent with four would lose the shape that makes it
-/// readable.
+/// The other reason to take one out is that label: a band where neither end of
+/// an edge is that edge's alone has nowhere to write one that belongs to it, and
+/// what a lane gives an edge is exactly that.
 ///
-/// `clear` asks for an edge whose road to the lane is along its box's own row.
-/// Every edge has a road either way, since one that has none there is given a
-/// row of the band, but the short one is worth asking for first.
-fn divert(
-    chart: &Flowchart,
-    rank: &[usize],
-    by_rank: &[Vec<usize>],
-    centres: &[usize],
-    clear_road: bool,
-) -> Option<Vec<usize>> {
-    let clear = |i: usize| !clear_road || road_is_clear(chart, rank, by_rank, i);
+/// `ok` is what the drawing has to be able to say with the edges left on the
+/// band, and the answer is the fewest edges that get it there. Among those, the
+/// ones that break up the fewest fans: a parent with one edge in the band loses
+/// nothing by having it routed round, and a parent with four would lose the shape
+/// that makes it readable.
+fn divert(chart: &Flowchart, rank: &[usize], ok: impl Fn(&[usize]) -> bool) -> Option<Vec<usize>> {
     let mut band: Vec<usize> = (0..chart.edges.len())
         .filter(|i| {
             let e = &chart.edges[*i];
@@ -684,22 +661,51 @@ fn divert(
     }
     band.sort_by_key(|i| fan[chart.edges[*i].from]);
 
-    band.retain(|i| clear(*i));
-
-    let honest = |out: &[usize]| bus_runs_are_honest(chart, rank, out, |i| centres[i]);
     for &i in &band {
-        if honest(&[i]) {
+        if ok(&[i]) {
             return Some(vec![i]);
         }
     }
-    for (n, &i) in band.iter().enumerate() {
-        for &j in &band[n + 1..] {
-            if honest(&[i, j]) {
-                return Some(vec![i, j]);
-            }
+    // Two out of one fan leave that parent with a stump where its shape was, so
+    // a pair from two of them is taken over a pair from one.
+    let pairs = band.iter().enumerate().flat_map(|(n, &i)| {
+        band[n + 1..].iter().map(move |&j| {
+            let same = chart.edges[i].from == chart.edges[j].from;
+            (usize::from(same), i, j)
+        })
+    });
+    let mut pairs: Vec<(usize, usize, usize)> = pairs.collect();
+    pairs.sort_by_key(|(same, _, _)| *same);
+    pairs
+        .into_iter()
+        .find(|(_, i, j)| ok(&[*i, *j]))
+        .map(|(_, i, j)| vec![i, j])
+}
+
+/// Whether every label on a band belongs to a line no other edge is on.
+///
+/// A label hangs beside whichever of its edge's two ends that edge has to
+/// itself: the parent's, where the parent has one child; the child's, where the
+/// child has one parent. Where neither is — two parents each with two labelled
+/// children — every line of the band carries two edges, and a label beside any
+/// of them reads as either's. Stacking them keeps one from being written over
+/// the other and says nothing about which is which.
+fn labels_are_told_apart(chart: &Flowchart, rank: &[usize], diverted: &[usize]) -> bool {
+    let on_band = |i: usize| {
+        let e = &chart.edges[i];
+        rank[e.to] == rank[e.from] + 1 && !diverted.contains(&i)
+    };
+    let mut parents = vec![0usize; chart.nodes.len()];
+    let mut children = vec![0usize; chart.nodes.len()];
+    for (i, e) in chart.edges.iter().enumerate() {
+        if on_band(i) {
+            parents[e.to] += 1;
+            children[e.from] += 1;
         }
     }
-    None
+    chart.edges.iter().enumerate().all(|(i, e)| {
+        e.label.is_none() || !on_band(i) || children[e.from] == 1 || parents[e.to] == 1
+    })
 }
 
 /// Which edges are routed round the outside rather than drawn on their band.
@@ -1044,8 +1050,15 @@ fn draw_top_down(
 
     // A lane is a vertical run, which no label can be written along, so the
     // label hangs beside it and the next lane starts past the far end of it.
+    //
+    // Past the band's labels as well as past the boxes: a label of the band hangs
+    // beside a column and the rightmost of them can reach further out than the
+    // columns do, so a lane set against the boxes wrote its own label over that
+    // one — `t2qqfaqqq` for two labels three columns apart. `extent` is one past
+    // the last column any of them is written in, and a lane keeps one clear of
+    // it, the way it keeps one between itself and its own label.
     let mut lane_off = Vec::with_capacity(long_edges.len());
-    let mut lane_x = content_width + 1;
+    let mut lane_x = (content_width + 1).max(extent + 1);
     for &i in &long_edges {
         lane_off.push(lane_x);
         lane_x += 2 + chart.edges[i]
@@ -2686,6 +2699,58 @@ mod tests {
     }
 
     #[test]
+    fn a_label_beside_a_line_two_edges_are_on_belongs_to_neither() {
+        // The criterion for taking an edge off a band it is not lying about: a
+        // label hangs beside whichever end its edge has to itself, and where two
+        // parents each have two labelled children neither end of any of the four
+        // is.
+        let code = "flowchart TD\n A -->|ac| C\n A -->|ad| D\n B -->|bc| C\n B -->|bd| D\n";
+        let chart = parse_flowchart(code).unwrap();
+        let rank = ranks(&chart).unwrap();
+        assert!(!labels_are_told_apart(&chart, &rank, &[]));
+        // `A --> C` off the band is not enough: `B --> D` still shares both of
+        // its ends, with `B --> C` at one and `A --> D` at the other.
+        assert!(!labels_are_told_apart(&chart, &rank, &[0]));
+        // Both edges into `C` off it leaves every parent with one child, so each
+        // of the two labels left has a column of its own to hang beside.
+        assert!(labels_are_told_apart(&chart, &rank, &[0, 2]));
+        // A band with nothing written on it has nothing to tell apart, however
+        // its ends are shared.
+        let plain = parse_flowchart("flowchart TD\n A --> C\n A --> D\n B --> C\n B --> D\n");
+        let plain = plain.unwrap();
+        assert!(labels_are_told_apart(&plain, &ranks(&plain).unwrap(), &[]));
+    }
+
+    #[test]
+    fn labels_a_band_cannot_tell_apart_are_moved_off_it() {
+        // Stacking the four kept one from being written over another and said
+        // nothing about which was which. Two of the edges are taken off the band
+        // instead: `ad` and `bd` are then beside columns their own edges have to
+        // themselves, and `ac` and `bc` beside lanes nothing else is on.
+        let out = rows("flowchart TD\n A -->|ac| C\n A -->|ad| D\n B -->|bc| C\n B -->|bd| D\n");
+        let joined = out.join("\n");
+        assert!(out.iter().any(|r| r == "ad │       │bd │ac  │"), "{joined}");
+        assert!(
+            out.iter().any(|r| r == "   │       │   │    │bc"),
+            "{joined}"
+        );
+
+        // Sideways a label is written into the connector itself, so the two that
+        // stay are on their own parents' rows and the two that leave are in the
+        // lanes under the boxes.
+        let out = rows("flowchart LR\n A -->|ac| C\n A -->|ad| D\n B -->|bc| C\n B -->|bd| D\n");
+        let joined = out.join("\n");
+        for row in [
+            "│ A │─┬──ad─┐  ┌┬▶│ C │",
+            "│ B │─│──bd─┴──││▶│ D │",
+            "  │   └───ac───│┘",
+            "  └────bc──────┘",
+        ] {
+            assert!(out.iter().any(|r| r == row), "{row:?} missing:\n{joined}");
+        }
+    }
+
+    #[test]
     fn four_sideways_labels_between_two_parents_and_two_children_all_survive() {
         // The `LR` version of the same collision, and it was the worse one: two
         // labels were lost outright and the two that survived sat on a row
@@ -2743,11 +2808,12 @@ mod tests {
     fn stacked_labels_stay_clear_of_the_boxes_above_them() {
         // The bus sits in the middle of the band and labels stack upwards from
         // it, so a band that does not grow with them writes the topmost one
-        // over the row of boxes above.
+        // over the row of boxes above. One parent's three children, since a
+        // label at a child of its own is a label that belongs to one edge and
+        // stays on the band.
         let long = "x".repeat(12);
-        let code = format!(
-            "flowchart TD\n A -->|{long}1| C\n A -->|{long}2| D\n B -->|{long}3| C\n B -->|{long}4| D\n"
-        );
+        let code =
+            format!("flowchart TD\n A -->|{long}1| C\n A -->|{long}2| D\n A -->|{long}3| E\n");
         let out = rows(&code);
         let joined = out.join("\n");
         for (i, row) in out.iter().enumerate() {
@@ -2759,7 +2825,7 @@ mod tests {
             }
         }
         // The two rows of boxes are still whole.
-        assert_eq!(joined.matches('┌').count(), 4, "{joined}");
+        assert_eq!(joined.matches("┌───┐").count(), 4, "{joined}");
     }
 
     #[test]
@@ -2986,7 +3052,7 @@ mod tests {
     }
 
     #[test]
-    fn a_road_through_a_band_stays_clear_of_the_labels_stacked_in_it() {
+    fn a_road_through_a_band_stays_clear_of_the_labels_in_it() {
         // The band a road takes a row of is also where the labels are written,
         // and a line parts around a label rather than erasing it — so a road
         // drawn where a label had been was the thing that went missing. The band
@@ -2997,7 +3063,7 @@ mod tests {
             let label = |s: &str| format!("{s}{}", "q".repeat(n));
             // Both boxes of the first rank are an end of an edge that skips a
             // rank, and only one of them can be the last of it, so one of the two
-            // takes a road — through the band the four labels stack up in.
+            // takes a road — through the band the labels are written in.
             let code = format!(
                 "flowchart TD\n A -->|{}| X\n A -->|{}| Y\n B -->|{}| X\n B -->|{}| Y\n\
                  X --> C\n Y --> D\n A --> C\n B --> D\n",
