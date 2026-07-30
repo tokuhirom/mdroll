@@ -412,8 +412,43 @@ whatever boxes stand between, and comes out of hiding beside the box next door
 reading as that box's edge. Every edge routed round the outside is therefore
 asked for a road that is clear — both of its ends the last boxes of their ranks
 — whether it was taken off a band or skips a rank of its own accord. Hence `C`
-above being moved to the end of its rank. Where no order gives every routed edge
-a clear road, the chart is declined.
+above being moved to the end of its rank.
+
+Only one box of a rank can be the last of it, so an order does not always exist:
+two edges skipping a rank out of the two boxes of one rank and into the two of
+another want all four ends last. The end that cannot have the short road takes a
+long one instead. It leaves the box on the side facing the band and travels a row
+of the band that is its own, which is clear of every box by construction — a band
+is what lies *between* the ranks — and it crosses the band's connectors on the
+way, which is now something a drawing can say. The band is deepened by the row it
+gives away, and only the band that gives one:
+
+```text
+A --> X --> C   ┌───┐   ┌───┐
+B --> Y --> D   │ A │   │ B │
+A --> C         └───┘   └───┘───┐
+B --> D           ├───────│───┐ │
+                  │       │   │ │
+                  │       │   │ │
+                  ▼       ▼   │ │
+                ┌───┐   ┌───┐ │ │
+                │ X │   │ Y │ │ │
+                └───┘   └───┘ │ │
+                  │       │   │ │
+                  │       │   │ │
+                  │       │   │ │
+                  │┌──────│───┘ │
+                  ▼▼      ▼     │
+                ┌───┐   ┌───┐   │
+                │ C │   │ D │◀──┘
+                └───┘   └───┘
+```
+
+`B --> D` has the clear road out of `B` and back into `D`, both being the last of
+their ranks. `A --> C` has neither, so it leaves the underside of `A` — where its
+own connector to `X` already leaves, which is why the two are joined there — and
+comes back over `C` one column across from the connector `X --> C` arrives in, so
+that the two arrowheads are not one.
 
 Two lanes belong to two edges, so where one crosses the other they do not meet.
 Box drawing has no character for one line passing over another, so the vertical
@@ -1189,12 +1224,17 @@ the edges, and sometimes there is an edge in the picture that nobody wrote.
       and where its label therefore belongs to it too. The v1.5 case is not all
       of the way home — where every connection was written the run is honest
       and stays shared, and the labels on it are still side by side.
-- [ ] The road out is only clear when both ends of the routed edge are the last
+- [x] The road out is only clear when both ends of the routed edge are the last
       boxes of their ranks, because a run reaching the lane passes behind
       whatever stands between and comes out of hiding as the next box's edge.
       A band with three parents over two children has no such edge and is still
       declined. Widening the canvas to give the run a column of its own, rather
-      than borrowing the space behind the boxes, would reach those too.
+      than borrowing the space behind the boxes, would reach those too. What it
+      took was a line of its own rather than a column: an end with no clear road
+      leaves the box into the band and travels a row of it that nothing else is
+      on, a band being the one part of the canvas no box is in. The band is
+      deepened by the row, and the short road is still preferred — an order that
+      gives every routed edge one is taken over an order that does not.
 - [x] Two lanes crossing are joined into a `┼`, which says the two edges meet.
       They do not, and this has been true since lanes were added; it is the one
       place left where a line is drawn through another and claims to touch it.
