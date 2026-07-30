@@ -1828,11 +1828,14 @@ mod tests {
         // Launching a browser costs a second or two, so a flowchart the box
         // renderer draws is never sent — and one it declines always is, because
         // the reader is looking at the source of it otherwise.
+        // Three parents over three children, each pair of them sharing one: the
+        // band's run offers every pair, and no order or diversion separates it.
         let app = app("```mermaid\nflowchart TD\n A --> B\n```\n\n\
-             ```mermaid\nflowchart TD\n Z --> C\n Z --> D\n A --> D\n B --> C\n```\n");
+             ```mermaid\nflowchart TD\n A --> D\n A --> E\n B --> E\n B --> F\n\
+             C --> D\n C --> F\n```\n");
         let jobs = app.diagrams_for_mmdc();
         assert_eq!(jobs.len(), 1, "{jobs:?}");
-        assert!(jobs[0].1.contains("Z --> C"), "the wrong one: {jobs:?}");
+        assert!(jobs[0].1.contains("C --> F"), "the wrong one: {jobs:?}");
     }
 
     #[test]

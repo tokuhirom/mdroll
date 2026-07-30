@@ -586,26 +586,52 @@ pub fn draw_flowchart(chart: &Flowchart, calc: &WidthCalc) -> Option<Vec<String>
     // today. Reordering a rank is a repair for a band whose runs would say
     // more than the document does, not a policy applied to every chart.
     let mut diverted: Vec<usize> = Vec::new();
-    let drawable = |order: &[Vec<usize>], out: &[usize]| {
+    let honest = |order: &[Vec<usize>], out: &[usize]| {
         let centres = across(order);
         bus_runs_are_honest(chart, &rank, out, |i| centres[i])
-            && roads_out_are_clear(chart, &rank, order, out)
     };
-    if !drawable(&by_rank, &diverted) {
+    // A run that leaves along its box's own row is shorter and turns less than
+    // one that has to drop into the band to get out, so an order that gives
+    // every routed edge the short road is preferred to one that does not.
+    let short = |order: &[Vec<usize>], out: &[usize]| {
+        honest(order, out) && roads_out_are_clear(chart, &rank, order, out)
+    };
+    if !short(&by_rank, &diverted) {
         let orders = untangled(chart, &rank, &by_rank);
         // A plain drawing beats a routed one, so every order is tried on its
-        // own before any of them is allowed to send an edge round the outside.
+        // own before any of them is allowed to send an edge round the outside,
+        // and the short road is asked for in both before the long one is taken
+        // in either.
+        let routed_round = |clear: bool| {
+            orders.iter().find_map(|order| {
+                // Nothing is taken out of a band that can say what it carries:
+                // an edge routed round costs a lane and a road, and the band it
+                // came off says no more for having lost it.
+                if honest(order, &[]) {
+                    return None;
+                }
+                let centres = across(order);
+                let out = divert(chart, &rank, order, &centres, clear)?;
+                let ok = if clear {
+                    short(order, &out)
+                } else {
+                    honest(order, &out)
+                };
+                ok.then(|| (order.clone(), out))
+            })
+        };
         let found = orders
             .iter()
-            .find(|order| drawable(order, &[]))
+            .find(|order| short(order, &[]))
             .map(|order| (order.clone(), Vec::new()))
+            .or_else(|| routed_round(true))
             .or_else(|| {
-                orders.iter().find_map(|order| {
-                    let centres = across(order);
-                    let out = divert(chart, &rank, order, &centres)?;
-                    drawable(order, &out).then(|| (order.clone(), out))
-                })
-            })?;
+                orders
+                    .iter()
+                    .find(|order| honest(order, &[]))
+                    .map(|order| (order.clone(), Vec::new()))
+            })
+            .or_else(|| routed_round(false))?;
         (by_rank, diverted) = found;
     }
 
@@ -628,13 +654,18 @@ pub fn draw_flowchart(chart: &Flowchart, calc: &WidthCalc) -> Option<Vec<String>
 /// fewest fans: a parent with one edge in the band loses nothing by having it
 /// routed round, and a parent with four would lose the shape that makes it
 /// readable.
+///
+/// `clear` asks for an edge whose road to the lane is along its box's own row.
+/// Every edge has a road either way, since one that has none there is given a
+/// row of the band, but the short one is worth asking for first.
 fn divert(
     chart: &Flowchart,
     rank: &[usize],
     by_rank: &[Vec<usize>],
     centres: &[usize],
+    clear_road: bool,
 ) -> Option<Vec<usize>> {
-    let clear = |i: usize| road_is_clear(chart, rank, by_rank, i);
+    let clear = |i: usize| !clear_road || road_is_clear(chart, rank, by_rank, i);
     let mut band: Vec<usize> = (0..chart.edges.len())
         .filter(|i| {
             let e = &chart.edges[*i];
@@ -892,6 +923,32 @@ fn draw_top_down(
         rank[e.to] == rank[e.from] + 1 && !diverted.contains(&i)
     };
 
+    // An end whose own row a box of its rank stands in cannot run along it, so
+    // it drops into the band and travels a row of its own there instead. The
+    // rows are handed out from the rightmost box of the rank inwards: a run
+    // starts at its box and travels right, so a road belonging to a box further
+    // right is never in the column of one further left, and the stub dropping to
+    // it crosses nothing on the way.
+    let blocked = |n: usize| by_rank[rank[n]].last() != Some(&n);
+    let place = |n: usize| by_rank[rank[n]].iter().position(|m| *m == n).unwrap_or(0);
+    let mut leaving: Vec<Vec<usize>> = vec![Vec::new(); by_rank.len()];
+    let mut arriving: Vec<Vec<usize>> = vec![Vec::new(); by_rank.len()];
+    for &i in &long_edges {
+        let e = &chart.edges[i];
+        if blocked(e.from) {
+            leaving[rank[e.from]].push(i);
+        }
+        if blocked(e.to) {
+            arriving[rank[e.to] - 1].push(i);
+        }
+    }
+    for band in 0..by_rank.len() {
+        leaving[band].sort_by_key(|i| std::cmp::Reverse(place(chart.edges[*i].from)));
+        arriving[band].sort_by_key(|i| std::cmp::Reverse(place(chart.edges[*i].to)));
+    }
+    let mut leaves_on = vec![None; chart.edges.len()];
+    let mut arrives_on = vec![None; chart.edges.len()];
+
     // Columns first. Where a box sits across the canvas does not depend on how
     // tall the bands between the ranks turn out to be, and the bands cannot be
     // measured until the labels have columns to be placed against.
@@ -962,7 +1019,25 @@ fn draw_top_down(
                 .map(|(i, _)| level[i])
                 .max()
                 .unwrap_or(0);
-            y += BAND.max(2 * stacked + 2);
+            // A road takes a row of its own at the near end of the band: the
+            // ones out of this rank just under its boxes, the ones into the next
+            // just over its own, with the arrowheads' row left between. Deep
+            // enough that the bus and its labels reach neither, which also
+            // leaves the two sets of roads clear of each other.
+            //
+            // A `BT` chart's arrows point at the boxes above them, so its band
+            // holds a row of arrowheads under them as well, and a road drawn
+            // along it would read as though every head on it were its own.
+            let (out, into) = (leaving[r].len(), arriving[r].len());
+            let lift = usize::from(chart.reversed && out > 0);
+            let depth = BAND.max(2 * (stacked + 1 + out + lift)).max(2 * into + 3);
+            for (k, &i) in leaving[r].iter().enumerate() {
+                leaves_on[i] = Some(y + lift + k);
+            }
+            for (k, &i) in arriving[r].iter().enumerate() {
+                arrives_on[i] = Some(y + depth - 2 - k);
+            }
+            y += depth;
         }
     }
     let height = y;
@@ -1008,10 +1083,23 @@ fn draw_top_down(
     }
     for (i, edge) in chart.edges.iter().enumerate() {
         if let Some(nth) = long_edges.iter().position(|j| *j == i) {
+            let (from, to) = (&boxes[edge.from], &boxes[edge.to]);
+            // A run along the box's own row leaves its side, and one that drops
+            // into the band leaves its underside — in the box's own column,
+            // where it joins whatever else leaves the box there, and arrives one
+            // column over from it, where it is clear of what else arrives.
+            let leaves = match leaves_on[i] {
+                None => End::beside(from.right() + 1, from.bottom(), '◀'),
+                Some(road) => End::dropped(from.center_x(), from.bottom() + 1, road, '▲'),
+            };
+            let arrives = match arrives_on[i] {
+                None => End::beside(to.right() + 1, to.center_y(), '◀'),
+                Some(road) => End::dropped(to.center_x() + 1, to.y.saturating_sub(1), road, '▼'),
+            };
             route_lane(
                 &mut grid,
-                &boxes[edge.from],
-                &boxes[edge.to],
+                leaves,
+                arrives,
                 Lane {
                     at: margin + lane_off[nth],
                     first: margin + content_width + 1,
@@ -1055,6 +1143,36 @@ fn draw_left_right(
         long_edges.len() + 1
     };
     let height = content_height + lanes;
+
+    // The same as the top-down layout, transposed: an end with a box of its rank
+    // under it cannot run down its own column, so it leaves sideways and takes a
+    // column of its own through the gap between the ranks. The columns are handed
+    // out from the bottom box of the rank up, so that a run reaching its column
+    // crosses only the columns of boxes below it, which start below its own row.
+    let blocked = |n: usize| by_rank[rank[n]].last() != Some(&n);
+    let place = |n: usize| by_rank[rank[n]].iter().position(|m| *m == n).unwrap_or(0);
+    let mut leaving: Vec<Vec<usize>> = vec![Vec::new(); by_rank.len()];
+    let mut arriving: Vec<Vec<usize>> = vec![Vec::new(); by_rank.len()];
+    for &i in &long_edges {
+        let e = &chart.edges[i];
+        if blocked(e.from) {
+            leaving[rank[e.from]].push(i);
+        }
+        if blocked(e.to) {
+            arriving[rank[e.to] - 1].push(i);
+        }
+    }
+    for band in 0..by_rank.len() {
+        leaving[band].sort_by_key(|i| std::cmp::Reverse(place(chart.edges[*i].from)));
+        arriving[band].sort_by_key(|i| std::cmp::Reverse(place(chart.edges[*i].to)));
+    }
+    let mut leaves_on = vec![None; chart.edges.len()];
+    let mut arrives_on = vec![None; chart.edges.len()];
+    /// The columns a band's roads take, which is one each and one of line
+    /// between them and whatever they run beside.
+    fn pad(roads: usize) -> usize {
+        roads + usize::from(roads > 0)
+    }
 
     // Rows before columns. Which row a label lands on decides which other
     // labels it has to share space with, that decides how wide the run between
@@ -1146,7 +1264,8 @@ fn draw_left_right(
     }
     let gap: Vec<usize> = widest
         .iter()
-        .map(|end| {
+        .enumerate()
+        .map(|(band, end)| {
             match *end {
                 (0, 0) => 0,
                 (l, 0) => l + 6,
@@ -1154,14 +1273,32 @@ fn draw_left_right(
                 (l, r) => l + r + 7,
             }
             .max(BAND * 2)
+                // A road takes a column of its own at the near end of the gap:
+                // the ones out of this rank beside its boxes, the ones into the
+                // next beside the column the arrowheads are in. One cell of line
+                // is kept between the roads and the boxes, since a road drawn
+                // against a box's side reads as a second wall of it.
+                + pad(leaving[band].len())
+                + pad(arriving[band].len())
         })
         .collect();
 
     let mut x = 0usize;
+    // Where the connectors of a band may be drawn, which is the gap less the
+    // columns its roads have taken at either end of it.
+    let mut window = vec![(0usize, 0usize); by_rank.len()];
     for (r, nodes) in by_rank.iter().enumerate() {
         for &i in nodes {
             boxes[i].x = x;
         }
+        let (gs, ge) = (x + column_width[r], x + column_width[r] + gap[r] - 1);
+        for (k, &i) in leaving[r].iter().enumerate() {
+            leaves_on[i] = Some(gs + 1 + k);
+        }
+        for (k, &i) in arriving[r].iter().enumerate() {
+            arrives_on[i] = Some(ge - 1 - k);
+        }
+        window[r] = (gs + pad(leaving[r].len()), ge - pad(arriving[r].len()));
         x += column_width[r] + gap[r];
     }
     // A lane label that outgrows the run it sits in is written past the far
@@ -1191,17 +1328,34 @@ fn draw_left_right(
                     offset: offset[i],
                     reserved: widest[rank[edge.from]],
                 },
+                window[rank[edge.from]],
                 chart.reversed,
                 calc,
             );
-        } else if let Some(nth) = long_edges.iter().position(|j| *j == i) {
-            let lane = content_height + nth + 1;
+        }
+    }
+    // The roads after the bands, so that a road crossing a connector is drawn
+    // the same way round whichever order the two were written in.
+    for (i, edge) in chart.edges.iter().enumerate() {
+        if let Some(nth) = long_edges.iter().position(|j| *j == i) {
+            let (from, to) = (&boxes[edge.from], &boxes[edge.to]);
+            // A run down the box's own column leaves its underside; one that has
+            // to take a road leaves the side, in the box's own row, where it
+            // joins whatever else leaves or arrives there.
+            let leaves = match leaves_on[i] {
+                None => End::beside(from.bottom() + 1, from.center_x(), '▲'),
+                Some(road) => End::dropped(from.center_y(), from.right() + 1, road, '◀'),
+            };
+            let arrives = match arrives_on[i] {
+                None => End::beside(to.bottom() + 1, to.center_x(), '▲'),
+                Some(road) => End::dropped(to.center_y(), to.x.saturating_sub(1), road, '▶'),
+            };
             route_lane_below(
                 &mut grid,
-                &boxes[edge.from],
-                &boxes[edge.to],
+                leaves,
+                arrives,
                 Lane {
-                    at: lane,
+                    at: content_height + nth + 1,
                     first: content_height,
                 },
                 edge.label.as_deref(),
@@ -1498,25 +1652,32 @@ fn connect_right(
     from: &Box,
     to: &Box,
     label: &EdgeLabel,
+    // The columns of the gap a connector may turn or write a label in: the roads
+    // of the edges routed round have taken the ones at either end of it.
+    window: (usize, usize),
     reversed: bool,
     calc: &WidthCalc,
 ) {
     let (fy, ty) = (from.center_y(), to.center_y());
     let left = from.right() + 1;
     let right = to.x;
+    // A box narrower than its rank leaves more room than the gap itself does, so
+    // the near end of the window is wherever the boxes stop being in the way.
+    let (open, close) = (window.0.max(left), window.1);
 
     // The connector has to turn clear of the labels hanging at either end, and
     // of the *widest* of them rather than its own, so that everything leaving
     // one box still turns in one column. The gap was widened by that much.
     let (hold_left, hold_right) = label.reserved;
-    let mut mid = left + (right - left) / 2;
+    let mut mid = open + (close + 1 - open) / 2;
     if fy != ty {
         if hold_left > 0 {
-            mid = mid.max(left + hold_left + 3);
+            mid = mid.max(open + hold_left + 3);
         }
         if hold_right > 0 {
-            mid = mid.min(right.saturating_sub(hold_right + 4));
+            mid = mid.min((close + 1).saturating_sub(hold_right + 4));
         }
+        mid = mid.clamp(open, close);
     }
     // Written before the lines: a line is drawn only where the canvas is still
     // blank, so it parts around the label rather than erasing it.
@@ -1526,12 +1687,12 @@ fn connect_right(
         // written at the same place the second is drawn over the first: the
         // label that survived read as though it belonged to the other edge.
         let (x, y) = if label.at_left {
-            (left + 2 + label.offset, fy)
+            (open + 2 + label.offset, fy)
         } else {
             (
-                right
+                (close + 1)
                     .saturating_sub(calc.str(text) + 2 + label.offset)
-                    .max(left + 1),
+                    .max(open + 1),
                 ty,
             )
         };
@@ -1608,18 +1769,68 @@ struct Lane {
     first: usize,
 }
 
+/// One end of an edge routed round the outside.
+///
+/// The run travels out to the lane along `road` — a row in a top-down chart, a
+/// column in a sideways one — and gets there from `side`, along the line `out`
+/// across it. Where the box's own line is clear of the boxes of its rank, `side`
+/// and `road` are the same and the run leaves the box straight out with no turn
+/// at all. Where a box stands in it, the road is a line of the band and `side` is
+/// where the run leaves the box for it.
+///
+/// A sideways chart is the same thing transposed: `out` is the row the run leaves
+/// the box along, and `side` and `road` are columns.
+struct End {
+    out: usize,
+    side: usize,
+    road: usize,
+    /// The arrowhead this end gets where it is the one an arrow points at. It
+    /// goes in the cell where the run meets the box, which is `out` and `side` —
+    /// in that order in a top-down chart and the other way round in a sideways
+    /// one, the two being transposes of each other.
+    head: char,
+    /// Whether the road is the box's own line. There the run leaves the box with
+    /// no turn at all, and passes the ranks it is not part of, so it may only
+    /// fill blank cells until it is out among the lanes.
+    own_row: bool,
+}
+
+impl End {
+    /// An end that leaves along its box's own line, from the cell beside it.
+    fn beside(out: usize, road: usize, head: char) -> End {
+        End {
+            out,
+            side: road,
+            road,
+            head,
+            own_row: true,
+        }
+    }
+
+    /// An end that leaves the box for a road of its own through the band.
+    fn dropped(out: usize, side: usize, road: usize, head: char) -> End {
+        End {
+            out,
+            side,
+            road,
+            head,
+            own_row: false,
+        }
+    }
+}
+
 /// Route a left-to-right edge that skips a rank under the boxes between it and
 /// its target, and back up.
 fn route_lane_below(
     grid: &mut Grid,
-    from: &Box,
-    to: &Box,
+    from: End,
+    to: End,
     lane: Lane,
     label: Option<&str>,
     reversed: bool,
     calc: &WidthCalc,
 ) {
-    let (fx, tx) = (from.center_x(), to.center_x());
+    let (fx, tx) = (from.road, to.road);
     // The lane is clear of every box, so the label can sit in the line itself,
     // centred on the run that spans the ranks the edge skips — but past the far
     // corner when the run is too short for it, since a corner is drawn hard and
@@ -1634,17 +1845,33 @@ fn route_lane_below(
         };
         grid.text(x, lane.at, label, calc);
     }
-    // Down to the lane and back up. Above the lanes the column runs behind the
-    // boxes of its own rank and may only fill blank cells, but once among them
-    // it crosses the lanes of the other edges that skip a rank, and there it
-    // has to say so: their corners are drawn hard, so the line used to stop dead
-    // at the first one and start again below it.
-    for (x, top) in [(fx, from.bottom() + 1), (tx, to.bottom() + 1)] {
-        for y in top..lane.at {
-            if y < lane.first {
-                grid.put_soft(x, y, '│', calc);
+    for end in [&from, &to] {
+        // The stub between the box and a road through the gap, along the box's
+        // own row: what it meets there is the box's own connectors, and the roads
+        // it passes belong to the boxes below, which start below this row.
+        for x in end.side.min(end.road)..=end.side.max(end.road) {
+            if x != end.road {
+                grid.join(x, end.out, LEFT | RIGHT, calc);
+            }
+        }
+        if !end.own_row {
+            // The corner says the line carries on towards the box even where the
+            // stub is empty, since the box is then right beside the corner and
+            // the line has to be seen to come out of it.
+            let turn = if end.road < end.side { RIGHT } else { LEFT };
+            grid.join(end.road, end.out, turn | DOWN, calc);
+        }
+        // Down to the lane. A run down the box's own column passes the boxes of
+        // its rank and may only fill blank cells there, but once among the lanes
+        // it crosses the ones belonging to the other edges routed round, and
+        // there it has to say so: their corners are drawn hard, so the line used
+        // to stop dead at the first one and start again below it.
+        let first = end.out + usize::from(!end.own_row);
+        for y in first..lane.at {
+            if end.own_row && y < lane.first {
+                grid.put_soft(end.road, y, '│', calc);
             } else {
-                grid.cross(x, y, UP | DOWN, calc);
+                grid.cross(end.road, y, UP | DOWN, calc);
             }
         }
     }
@@ -1653,43 +1880,55 @@ fn route_lane_below(
     }
     grid.join(fx, lane.at, UP | RIGHT, calc);
     grid.join(tx, lane.at, UP | LEFT, calc);
-    let (head_x, head_y) = if reversed {
-        (fx, from.bottom() + 1)
-    } else {
-        (tx, to.bottom() + 1)
-    };
-    grid.put(head_x, head_y, '▲', calc);
+    let end = if reversed { &from } else { &to };
+    grid.put(end.side, end.out, end.head, calc);
 }
 
 /// Route an edge that skips a rank out to its own lane and back.
 fn route_lane(
     grid: &mut Grid,
-    from: &Box,
-    to: &Box,
+    from: End,
+    to: End,
     lane: Lane,
     label: Option<&str>,
     reversed: bool,
     calc: &WidthCalc,
 ) {
-    let start = from.bottom();
-    let end = to.center_y();
+    let (start, end) = (from.road, to.road);
     // Beside the lane, not in it: the horizontal ends of this route pass behind
     // the boxes of their own rank, and a label written there would sit on top
     // of one. Only the lane column itself is clear all the way down.
     if let Some(label) = label {
         grid.text(lane.at + 1, start + (end - start) / 2, label, calc);
     }
-    // Out to the lane and back. The two horizontal ends run behind the boxes of
-    // their own rank and may only fill blank cells there, but where they reach
-    // the lanes they cross the ones belonging to the other edges that skip a
-    // rank, and there they have to say so: a lane's corner is drawn hard, so the
-    // run used to stop at the first one it met.
-    for (y, x0) in [(start, from.right() + 1), (end, to.right() + 1)] {
-        for x in x0..lane.at {
-            if x < lane.first {
-                grid.put_soft(x, y, '─', calc);
+    for end in [&from, &to] {
+        // The stub between the box and a road through the band. Every cell of it
+        // is the box's own: the roads it passes belong to boxes further right,
+        // whose runs start further right than this column and are never in it.
+        for y in end.side.min(end.road)..=end.side.max(end.road) {
+            if y != end.road {
+                grid.join(end.out, y, UP | DOWN, calc);
+            }
+        }
+        if !end.own_row {
+            // The corner the run turns in. It says the line carries on towards
+            // the box even where the stub is empty, because the box is then
+            // directly above (or below) the corner and the line has to be seen
+            // to come out of it rather than to start beside it.
+            let turn = if end.road < end.side { DOWN } else { UP };
+            grid.join(end.out, end.road, turn | RIGHT, calc);
+        }
+        // Out to the lane. A run along the box's own row passes the ranks it is
+        // not part of and may only fill blank cells there, but where either kind
+        // reaches the lanes it crosses the ones belonging to the other edges
+        // routed round, and there it has to say so: a lane's corner is drawn
+        // hard, so the run used to stop at the first one it met.
+        let first = end.out + usize::from(!end.own_row);
+        for x in first..lane.at {
+            if end.own_row && x < lane.first {
+                grid.put_soft(x, end.road, '─', calc);
             } else {
-                grid.cross(x, y, LEFT | RIGHT, calc);
+                grid.cross(x, end.road, LEFT | RIGHT, calc);
             }
         }
     }
@@ -1700,12 +1939,8 @@ fn route_lane(
     }
     grid.join(lane.at, start, LEFT | DOWN, calc);
     grid.join(lane.at, end, UP | LEFT, calc);
-    let (head_x, head_y) = if reversed {
-        (from.right() + 1, start)
-    } else {
-        (to.right() + 1, end)
-    };
-    grid.put(head_x, head_y, '◀', calc);
+    let end = if reversed { &from } else { &to };
+    grid.put(end.out, end.side, end.head, calc);
 }
 
 // ---------------------------------------------------------------------------
@@ -2191,6 +2426,62 @@ mod tests {
             .unwrap_or_else(|| panic!("no {boxed}:\n{}", out.join("\n")))
     }
 
+    /// Whether every cell between two boxes of one rank is blank.
+    ///
+    /// Nothing in this renderer has any business there: a band's connectors are
+    /// between the ranks, a lane is out past the far end of them, and a run out
+    /// to a lane travels either the line beyond the last box of its rank or a
+    /// line of the band. Whatever else appears has come out from behind a box and
+    /// reads as the edge of whichever box it came out beside.
+    ///
+    /// The boxes of one rank sit `GAP` columns apart across the canvas, or one
+    /// row apart down it; two boxes further apart than that are of two different
+    /// ranks, and what lies between them is the band that joins them.
+    fn nothing_stands_between_the_boxes(out: &[String]) -> Result<(), String> {
+        let cells: Vec<Vec<char>> = out.iter().map(|r| r.chars().collect()).collect();
+        let blank = |ys: std::ops::Range<usize>, xs: std::ops::Range<usize>| {
+            let seen: String = ys
+                .flat_map(|y| cells.get(y).into_iter().flat_map(|r| r.get(xs.clone())))
+                .flatten()
+                .collect();
+            match seen.trim().is_empty() {
+                true => Ok(()),
+                false => Err(format!(
+                    "{seen:?} stands between two boxes:\n{}",
+                    out.join("\n")
+                )),
+            }
+        };
+        // Every box, as the row its top is on and the columns it spans.
+        let boxes: Vec<(usize, usize, usize)> = cells
+            .iter()
+            .enumerate()
+            .flat_map(|(y, row)| {
+                let corners: Vec<usize> = row
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, c)| matches!(c, '┌' | '╭' | '┐' | '╮'))
+                    .map(|(x, _)| x)
+                    .collect();
+                corners
+                    .chunks_exact(2)
+                    .map(|pair| (y, pair[0], pair[1]))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        for &(y, open, close) in &boxes {
+            for &(other_y, other_open, other_close) in &boxes {
+                if y == other_y && close + 1 + GAP == other_open {
+                    blank(y..y + 3, close + 1..other_open)?;
+                }
+                if (open, close) == (other_open, other_close) && y + 4 == other_y {
+                    blank(y + 3..y + 4, open..close + 1)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     #[test]
     fn a_sideways_fan_turns_in_one_glyph_rather_than_in_the_last_one_drawn() {
         // Every connector of a band turns in the same column and each knows
@@ -2624,9 +2915,8 @@ mod tests {
         // A lane is out past the far end of every rank, and the run reaching
         // it passes behind whatever boxes stand between: it came out of hiding
         // beside the box next door and read as that box's edge —
-        // `│ C │◀──│ D │─┘` for a run that starts at `B`. So the rank is
-        // ordered to put both of its ends last, and where that cannot be had
-        // the chart is declined.
+        // `│ C │◀──│ D │─┘` for a run that starts at `B`. The rank is ordered to
+        // put both of its ends last, which is where that row is clear.
         let out = rows("flowchart TD\n A --> C\n A --> D\n B --> C\n");
         let row = row_of(&out, "│ C │");
         assert!(
@@ -2635,12 +2925,14 @@ mod tests {
             out.join("\n")
         );
 
-        // `Z`, `A` and `B` all reach the pair below them, so whichever edge
-        // were taken out would have a box beside it whichever way round they
-        // are put.
+        // `Z`, `A` and `B` all reach the pair below them, so whichever edge is
+        // taken out has a box beside it whichever way round they are put. That
+        // one takes a road through the band instead, and the row of the boxes
+        // stays as clear as it is where the road along it was free.
         for dir in ["TD", "LR", "BT", "RL"] {
             let code = format!("flowchart {dir}\n Z --> C\n Z --> D\n A --> D\n B --> C\n");
-            assert!(render(&code, &CALC).is_none(), "drawn anyway:\n{code}");
+            let out = rows(&code);
+            nothing_stands_between_the_boxes(&out).unwrap_or_else(|e| panic!("{dir}: {e}"));
         }
     }
 
@@ -2667,16 +2959,123 @@ mod tests {
     }
 
     #[test]
-    fn a_chart_whose_routed_edges_cannot_all_have_a_clear_road_is_declined() {
+    fn an_end_with_no_clear_road_takes_one_through_the_band_instead() {
         // Two edges skip a rank, and their four ends are the two boxes of one
         // rank and the two of another. Only one box of a rank can be its last,
-        // so whichever way round the ranks are put, one of the two runs would
-        // pass behind a box and come out as its edge.
+        // so whichever way round the ranks are put, one of the two runs has a
+        // box in the row it would leave along. It leaves off the box into a row
+        // of the band instead — where no box stands at all — and travels that
+        // to its lane, so both edges are drawn and neither passes behind
+        // anything. Widening the band by the row is what it costs.
         for dir in ["TD", "LR", "BT", "RL"] {
             let code =
                 format!("flowchart {dir}\n A --> X --> C\n B --> Y --> D\n A --> C\n B --> D\n");
-            assert!(render(&code, &CALC).is_none(), "drawn anyway:\n{code}");
+            let out = rows(&code);
+            nothing_stands_between_the_boxes(&out).unwrap_or_else(|e| panic!("{dir}: {e}"));
         }
+
+        // `A --> C` in the top-down one: out of A's underside, along the row
+        // under its rank and across `B`'s connector, which it crosses rather
+        // than joins, then down its lane and back in over `C` — one column over
+        // from where `X --> C` arrives, so that the two are told apart.
+        let out = rows("flowchart TD\n A --> X --> C\n B --> Y --> D\n A --> C\n B --> D\n");
+        let joined = out.join("\n");
+        assert!(out.iter().any(|r| r == "  ├───────│───┐ │"), "{joined}");
+        assert!(out.iter().any(|r| r == "  │┌──────│───┘ │"), "{joined}");
+        assert!(out.iter().any(|r| r == "  ▼▼      ▼     │"), "{joined}");
+    }
+
+    #[test]
+    fn a_road_through_a_band_stays_clear_of_the_labels_stacked_in_it() {
+        // The band a road takes a row of is also where the labels are written,
+        // and a line parts around a label rather than erasing it — so a road
+        // drawn where a label had been was the thing that went missing. The band
+        // is deepened by the road, which is what keeps the two apart. Every
+        // label width is tried, since the rows they stack up in are worked out
+        // from what fits beside what.
+        for n in 1..10 {
+            let label = |s: &str| format!("{s}{}", "q".repeat(n));
+            // Both boxes of the first rank are an end of an edge that skips a
+            // rank, and only one of them can be the last of it, so one of the two
+            // takes a road — through the band the four labels stack up in.
+            let code = format!(
+                "flowchart TD\n A -->|{}| X\n A -->|{}| Y\n B -->|{}| X\n B -->|{}| Y\n\
+                 X --> C\n Y --> D\n A --> C\n B --> D\n",
+                label("ax"),
+                label("ay"),
+                label("bx"),
+                label("by"),
+            );
+            let out = rows(&code);
+            let joined = out.join("\n");
+            for text in ["ax", "ay", "bx", "by"] {
+                assert!(joined.contains(&label(text)), "{n}:\n{joined}");
+            }
+            // The road is on the row under the boxes of the first rank, and has
+            // to be a line the whole way from the box it leaves to the corner it
+            // turns into its lane at.
+            let road = 3;
+            let mut x = out[road].find(|c: char| c != ' ').unwrap();
+            loop {
+                match out[road].chars().nth(x) {
+                    // `│` is another box's connector, which the road crosses.
+                    Some('─' | '├' | '┬' | '┴' | '│') => x += 1,
+                    Some('┐') => break,
+                    other => panic!("{n}: the road stops at column {x}: {other:?}\n{joined}"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_road_through_a_gap_stays_clear_of_the_labels_written_in_it() {
+        // The same sideways, where a road takes a column of the gap between two
+        // ranks and the labels are written along the connectors in it. The gap is
+        // widened by the road for the same reason.
+        for n in 1..10 {
+            let label = "q".repeat(n);
+            let code = format!(
+                "flowchart LR\n A -->|{label}| X --> C\n B --> Y --> D\n A --> C\n B --> D\n"
+            );
+            let out = rows(&code);
+            let joined = out.join("\n");
+            assert!(joined.contains(&label), "{n}:\n{joined}");
+            // A's road: the column of the corner it turns down in, which is the
+            // first one on A's own row, and a line from there down to the lane.
+            let row = out.iter().position(|r| r.contains("│ A │")).unwrap();
+            let col = out[row]
+                .chars()
+                .position(|c| matches!(c, '┐' | '┬'))
+                .unwrap_or_else(|| panic!("{n}, A has no road:\n{joined}"));
+            let mut y = row + 1;
+            loop {
+                match out[y].chars().nth(col) {
+                    Some('│' | '├' | '┤' | '─') => y += 1,
+                    Some('└') => break,
+                    other => panic!("A's road stops at row {y}: {other:?}\n{joined}"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_road_through_the_band_leaves_the_bands_that_need_none_as_they_were() {
+        // The row a road takes is added to the band it is in and to no other, so
+        // a chart with nothing routed comes out the size it always did — and one
+        // road does not deepen the band above it or the one below.
+        let plain = rows("flowchart TD\n A --> B --> C --> D\n");
+        assert_eq!(plain.len(), 3 * 4 + BAND * 3, "{}", plain.join("\n"));
+
+        // `A --> C` has a road out of A's band, since `B` stands in A's own row;
+        // every other band is the depth it was.
+        let roads = rows("flowchart TD\n A --> B\n A --> C\n B --> D\n C --> D\n A --> D\n");
+        let deep = rows("flowchart TD\n A --> B\n A --> C\n B --> D\n C --> D\n");
+        assert_eq!(
+            roads.len(),
+            deep.len(),
+            "the road deepened a band that has none:\n{}",
+            roads.join("\n")
+        );
     }
 
     #[test]
