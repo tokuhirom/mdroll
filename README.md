@@ -407,6 +407,36 @@ B -->|bc| C     └───┘   └───┘─┐
                 └───┘   └───┘
 ```
 
+A label wants that as much as a run does. It hangs beside whichever of its edge's
+two ends the edge has to itself — the parent's, where the parent has one child;
+the child's, where the child has one parent — and where neither is, every line of
+the band carries two edges and a label beside any of them reads as either's.
+`A` and `B` both to `C` and `D`, all four labelled, is the case: the four used to
+be stacked on rows of their own, which kept one from being written over another
+and said nothing about which was which. Edges come off the band until what is
+left can say which is which, the same repair for the same kind of ambiguity:
+
+```text
+A -->|ac| C      ┌───┐   ┌───┐
+A -->|ad| D      │ A │   │ B │
+B -->|bc| C      └───┘   └───┘──────┐
+B -->|bd| D        ├───────│───┐    │
+                   │       │   │    │bc
+                ad │       │bd │ac  │
+                   └───────┤   │    │
+                    ┌──────│───│────┘
+                    ├──────│───┘
+                    ▼      ▼
+                 ┌───┐   ┌───┐
+                 │ C │   │ D │
+                 └───┘   └───┘
+```
+
+`ad` and `bd` are beside columns that carry one edge each, and `ac` and `bc`
+beside lanes that carry one each. An unlabelled band is nothing to repair,
+however its ends are shared, so `A --> C` and the three like it are drawn as
+before: the ambiguity is in the label, not in the lines.
+
 A lane runs past the far end of every rank, so a run reaching it passes behind
 whatever boxes stand between, and comes out of hiding beside the box next door
 reading as that box's edge. Every edge routed round the outside is therefore
@@ -1136,11 +1166,16 @@ And one found while fixing it:
       its own connector and several connectors arriving at one box share that
       row. The fix above does not reach it: that one stacks rows above the bus a
       fan hangs its children from, and `LR` has no bus to stack above.
-- [ ] Neither fix makes a label say *which* edge it belongs to where two of them
+- [x] Neither fix makes a label say *which* edge it belongs to where two of them
       end up side by side; it only stops one being drawn over the other. Two
       edges arriving at one box genuinely share the row they arrive on, and
       short of routing them apart there is nowhere a label could sit that
-      belongs to one and not the other.
+      belongs to one and not the other. Routing them apart is what it took, and
+      the road round the outside is what made it affordable: a band whose labels
+      cannot be told apart gives up edges to lanes, the fewest that leave every
+      remaining label beside a line one edge is on, and every one taken off
+      carries its own beside its lane. A band with nothing written on it is left
+      alone — the ambiguity is in the label, not in the lines.
 
 ### v1.6 — Themes
 
