@@ -415,6 +415,14 @@ box next door and read as that box's edge. Hence `C` above being moved to the
 end of its rank. Where both ends cannot be given a road that is clear, the chart
 is declined.
 
+Two lanes belong to two edges, so where one crosses the other they do not meet.
+Box drawing has no character for one line passing over another, so the vertical
+is drawn and the horizontal is left with a one-cell gap where it runs behind — a
+gap in a long run is read straight across, whereas a `┼` is read as a junction,
+which is the one thing the crossing is not. A corner is a different matter: two
+lanes leaving the same box share the row they leave on, and there they are
+joined.
+
 ```console
 $ mise use -g npm:@mermaid-js/mermaid-cli
 $ npx puppeteer browsers install chrome-headless-shell
@@ -1187,7 +1195,7 @@ the edges, and sometimes there is an edge in the picture that nobody wrote.
       A band with three parents over two children has no such edge and is still
       declined. Widening the canvas to give the run a column of its own, rather
       than borrowing the space behind the boxes, would reach those too.
-- [ ] Two lanes crossing are joined into a `┼`, which says the two edges meet.
+- [x] Two lanes crossing are joined into a `┼`, which says the two edges meet.
       They do not, and this has been true since lanes were added; it is the one
       place left where a line is drawn through another and claims to touch it.
 - [x] Ordering within a rank is the order the edges were written in, so two

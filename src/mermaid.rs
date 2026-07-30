@@ -195,6 +195,25 @@ impl Grid {
         self.put(x, y, junction(dirs | here), calc);
     }
 
+    /// Draw a line through a cell another line already passes through, without
+    /// saying the two meet.
+    ///
+    /// Two lanes are two different edges, and joining them into a `┼` says they
+    /// touch. Box drawing has no character for one line passing over another, so
+    /// the vertical is drawn and the horizontal is left with a one-cell gap where
+    /// it runs behind: a gap in a long run is read straight across, and the one
+    /// thing it cannot be read as is a junction. Anything already there that is
+    /// not a straight line is a corner where two edges leaving one box really do
+    /// share the cell, and joins as before.
+    fn cross(&mut self, x: usize, y: usize, dirs: u8, calc: &WidthCalc) {
+        let vertical = dirs & (UP | DOWN) != 0;
+        match self.cells.get(y).and_then(|row| row.get(x)) {
+            Some(Cell::Char('│')) if !vertical => {}
+            Some(Cell::Char('─')) if vertical => self.put(x, y, '│', calc),
+            _ => self.join(x, y, dirs, calc),
+        }
+    }
+
     fn rows(self) -> Vec<String> {
         self.cells
             .into_iter()
@@ -1564,19 +1583,19 @@ fn route_lane_below(
     // Down to the lane and back up. Above the lanes the column runs behind the
     // boxes of its own rank and may only fill blank cells, but once among them
     // it crosses the lanes of the other edges that skip a rank, and there it
-    // has to join what it finds: their corners are drawn hard, so the line used
-    // to stop dead at the first one and start again below it.
+    // has to say so: their corners are drawn hard, so the line used to stop dead
+    // at the first one and start again below it.
     for (x, top) in [(fx, from.bottom() + 1), (tx, to.bottom() + 1)] {
         for y in top..lane.at {
             if y < lane.first {
                 grid.put_soft(x, y, '│', calc);
             } else {
-                grid.join(x, y, UP | DOWN, calc);
+                grid.cross(x, y, UP | DOWN, calc);
             }
         }
     }
     for x in fx + 1..tx {
-        grid.join(x, lane.at, LEFT | RIGHT, calc);
+        grid.cross(x, lane.at, LEFT | RIGHT, calc);
     }
     grid.join(fx, lane.at, UP | RIGHT, calc);
     grid.join(tx, lane.at, UP | LEFT, calc);
@@ -1609,21 +1628,21 @@ fn route_lane(
     // Out to the lane and back. The two horizontal ends run behind the boxes of
     // their own rank and may only fill blank cells there, but where they reach
     // the lanes they cross the ones belonging to the other edges that skip a
-    // rank, and there they have to join: a lane's corner is drawn hard, so the
+    // rank, and there they have to say so: a lane's corner is drawn hard, so the
     // run used to stop at the first one it met.
     for (y, x0) in [(start, from.right() + 1), (end, to.right() + 1)] {
         for x in x0..lane.at {
             if x < lane.first {
                 grid.put_soft(x, y, '─', calc);
             } else {
-                grid.join(x, y, LEFT | RIGHT, calc);
+                grid.cross(x, y, LEFT | RIGHT, calc);
             }
         }
     }
     // The lane column itself is clear of every box all the way down, so it can
-    // join the whole way and let another edge's run cross it.
+    // be drawn the whole way and let another edge's run cross it.
     for y in start + 1..end {
-        grid.join(lane.at, y, UP | DOWN, calc);
+        grid.cross(lane.at, y, UP | DOWN, calc);
     }
     grid.join(lane.at, start, LEFT | DOWN, calc);
     grid.join(lane.at, end, UP | LEFT, calc);
@@ -2191,14 +2210,69 @@ mod tests {
     }
 
     #[test]
-    fn one_lane_crossing_another_is_drawn_as_a_crossing() {
+    fn one_lane_crossing_another_does_not_claim_to_meet_it() {
         // Here the lanes belong to different boxes, so one runs across the
-        // other rather than out of the same corner.
-        for dir in ["TD", "LR"] {
-            let code = format!("flowchart {dir}\n A --> B --> C --> D --> E\n A --> C\n B --> D\n");
+        // other rather than out of the same corner. The two edges do not meet
+        // there, and a `┼` said they did: the vertical is drawn and the
+        // horizontal shows the one-cell gap where it runs behind.
+        let td = rows("flowchart TD\n A --> B --> C --> D --> E\n A --> C\n B --> D\n");
+        let joined = td.join("\n");
+        assert!(!joined.contains('┼'), "TD:\n{joined}");
+        // B's run out to its own lane, crossing the lane A --> C is in.
+        assert!(td.iter().any(|r| r.trim() == "└───┘─│─┐"), "TD:\n{joined}");
+        let lr = rows("flowchart LR\n A --> B --> C --> D --> E\n A --> C\n B --> D\n");
+        let joined = lr.join("\n");
+        assert!(!joined.contains('┼'), "LR:\n{joined}");
+        // The lane A --> C is in, crossed by B's run down to its own, which
+        // carries on past it.
+        assert!(
+            lr.iter()
+                .any(|r| r.trim() == "└──────────│──────────┘          │"),
+            "LR:\n{joined}"
+        );
+    }
+
+    #[test]
+    fn the_line_in_front_of_a_crossing_stays_unbroken() {
+        // A crossing is drawn by leaving out one cell of the line behind it, so
+        // the line in front has to be continuous: a gap in that one would read
+        // as a line that stops rather than one that is crossed. Every chain
+        // length is tried because the lanes cross at a different place in each.
+        for n in 4..12 {
+            let names: Vec<String> = (0..n).map(|i| format!("N{i}")).collect();
+            let code = format!(
+                "flowchart TD\n {}\n {} --> {}\n {} --> {}\n",
+                names.join(" --> "),
+                names[0],
+                names[2],
+                names[1],
+                names[3],
+            );
             let out = rows(&code);
             let joined = out.join("\n");
-            assert!(joined.contains('┼'), "{dir}:\n{joined}");
+            assert!(!joined.contains('┼'), "{n} boxes:\n{joined}");
+            // The lane of the first edge is the column its top corner is in,
+            // and it has to be a line in every row down to the corner that
+            // turns it back towards its target.
+            let at = |r: &String, c: char| r.chars().position(|g| g == c);
+            let (top, col) = out
+                .iter()
+                .enumerate()
+                .find_map(|(y, r)| at(r, '┐').map(|x| (y, x)))
+                .unwrap_or_else(|| panic!("{n} boxes, no lane:\n{joined}"));
+            let end = out
+                .iter()
+                .enumerate()
+                .skip(top + 1)
+                .find_map(|(y, r)| (at(r, '┘') == Some(col)).then_some(y))
+                .unwrap_or_else(|| panic!("{n} boxes, lane never turns back:\n{joined}"));
+            for (y, row) in out.iter().enumerate().take(end).skip(top + 1) {
+                let glyph = row.chars().nth(col);
+                assert!(
+                    matches!(glyph, Some('│' | '├' | '┤' | '┼')),
+                    "{n} boxes, row {y} column {col} is {glyph:?}:\n{joined}"
+                );
+            }
         }
     }
 
