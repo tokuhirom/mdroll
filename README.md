@@ -408,12 +408,12 @@ B -->|bc| C     └───┘   └───┘─┐
 ```
 
 A lane runs past the far end of every rank, so a run reaching it passes behind
-whatever boxes stand between. An edge that skips a rank gets away with that,
-because the boxes it hides behind belong to ranks it has nothing to do with; an
-edge taken off its own band does not, and would come out of hiding beside the
-box next door and read as that box's edge. Hence `C` above being moved to the
-end of its rank. Where both ends cannot be given a road that is clear, the chart
-is declined.
+whatever boxes stand between, and comes out of hiding beside the box next door
+reading as that box's edge. Every edge routed round the outside is therefore
+asked for a road that is clear — both of its ends the last boxes of their ranks
+— whether it was taken off a band or skips a rank of its own accord. Hence `C`
+above being moved to the end of its rank. Where no order gives every routed edge
+a clear road, the chart is declined.
 
 Two lanes belong to two edges, so where one crosses the other they do not meet.
 Box drawing has no character for one line passing over another, so the vertical
@@ -1213,6 +1213,16 @@ the edges, and sometimes there is an edge in the picture that nobody wrote.
       its parent has it worse: its run is refused the cell outright and stops
       dead at the corner. The top-down bus states its junctions as directions
       and joins them; the sideways one has never been made to.
+
+And one found while reading the road out again:
+
+- [x] The road is asked for only where an edge was *taken off* a band. An edge
+      that skips a rank of its own accord was let out unasked, on the grounds
+      that it hides behind boxes belonging to ranks it has nothing to do with —
+      but the boxes standing in its way belong to its own rank, and `A --> C`
+      beside `B --> Z` drew `│ C │◀──│ Z │─┘`, joining two boxes nobody joined.
+      Both kinds of routed edge want the same road, and asking for it moves `C`
+      to the end of its rank the same way.
 
 ### v1.8 — Finding the keys
 

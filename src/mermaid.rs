@@ -586,22 +586,24 @@ pub fn draw_flowchart(chart: &Flowchart, calc: &WidthCalc) -> Option<Vec<String>
     // today. Reordering a rank is a repair for a band whose runs would say
     // more than the document does, not a policy applied to every chart.
     let mut diverted: Vec<usize> = Vec::new();
-    if !bus_runs_are_honest(chart, &rank, &diverted, |i| across(&by_rank)[i]) {
+    let drawable = |order: &[Vec<usize>], out: &[usize]| {
+        let centres = across(order);
+        bus_runs_are_honest(chart, &rank, out, |i| centres[i])
+            && roads_out_are_clear(chart, &rank, order, out)
+    };
+    if !drawable(&by_rank, &diverted) {
         let orders = untangled(chart, &rank, &by_rank);
         // A plain drawing beats a routed one, so every order is tried on its
         // own before any of them is allowed to send an edge round the outside.
-        let honest = |order: &[Vec<usize>], out: &[usize]| {
-            let centres = across(order);
-            bus_runs_are_honest(chart, &rank, out, |i| centres[i])
-        };
         let found = orders
             .iter()
-            .find(|order| honest(order, &[]))
+            .find(|order| drawable(order, &[]))
             .map(|order| (order.clone(), Vec::new()))
             .or_else(|| {
                 orders.iter().find_map(|order| {
                     let centres = across(order);
-                    divert(chart, &rank, order, &centres).map(|d| (order.clone(), d))
+                    let out = divert(chart, &rank, order, &centres)?;
+                    drawable(order, &out).then(|| (order.clone(), out))
                 })
             })?;
         (by_rank, diverted) = found;
@@ -632,20 +634,7 @@ fn divert(
     by_rank: &[Vec<usize>],
     centres: &[usize],
 ) -> Option<Vec<usize>> {
-    // The lane is out past the far end of every rank, and a run reaching it
-    // passes behind whatever boxes stand between. An edge that skips a rank
-    // gets away with that because the boxes it hides behind belong to ranks it
-    // has nothing to do with; an edge taken off its own band does not, and the
-    // route came out of hiding beside the box next door and read as that box's
-    // edge — `│ C │◀──│ D │─┘` for something that starts at `B`. Only an edge
-    // whose two ends are the last boxes of their ranks has a road that is
-    // clear the whole way.
-    let clear = |i: usize| {
-        let e = &chart.edges[i];
-        [e.from, e.to]
-            .iter()
-            .all(|&n| by_rank[rank[n]].last() == Some(&n))
-    };
+    let clear = |i: usize| road_is_clear(chart, rank, by_rank, i);
     let mut band: Vec<usize> = (0..chart.edges.len())
         .filter(|i| {
             let e = &chart.edges[*i];
@@ -680,6 +669,49 @@ fn divert(
         }
     }
     None
+}
+
+/// Which edges are routed round the outside rather than drawn on their band.
+fn routed(chart: &Flowchart, rank: &[usize], diverted: &[usize]) -> Vec<usize> {
+    (0..chart.edges.len())
+        .filter(|i| {
+            let e = &chart.edges[*i];
+            rank[e.to] > rank[e.from] + 1 || diverted.contains(i)
+        })
+        .collect()
+}
+
+/// Whether a routed edge's two ends both have a road to the lane with no box of
+/// their own rank standing in it.
+///
+/// The lane is out past the far end of every rank, and a run reaching it passes
+/// behind whatever boxes stand between. Only an edge whose two ends are the last
+/// boxes of their ranks has a road that is clear the whole way.
+fn road_is_clear(chart: &Flowchart, rank: &[usize], by_rank: &[Vec<usize>], i: usize) -> bool {
+    let e = &chart.edges[i];
+    [e.from, e.to]
+        .iter()
+        .all(|&n| by_rank[rank[n]].last() == Some(&n))
+}
+
+/// The same, asked of every edge the drawing would route.
+///
+/// A connector is only drawn where the canvas is still blank, so behind a box a
+/// run vanishes and comes out the far side reading as that box's edge —
+/// `│ C │◀──│ D │─┘` for something that starts at `B`. `divert` has always asked
+/// this of an edge it takes off a band. An edge that *skips* a rank was let
+/// through unasked, on the grounds that the boxes it hides behind belong to
+/// ranks it has nothing to do with; the boxes in its way belong to its own rank,
+/// and `A --> C` under `B --> Z` drew a line from `Z` to `C` that nobody wrote.
+fn roads_out_are_clear(
+    chart: &Flowchart,
+    rank: &[usize],
+    by_rank: &[Vec<usize>],
+    diverted: &[usize],
+) -> bool {
+    routed(chart, rank, diverted)
+        .into_iter()
+        .all(|i| road_is_clear(chart, rank, by_rank, i))
 }
 
 /// Where each box starts across the canvas, and how wide the widest rank is.
@@ -743,6 +775,12 @@ fn row_starts(by_rank: &[Vec<usize>], nodes: usize) -> (Vec<usize>, usize) {
 /// Whether it worked is not assumed. Some bands are tangled by the graph and
 /// not by the order — several parents reaching an overlapping set of children
 /// is one no sweep can separate — and there the chart is declined as before.
+///
+/// The other reason an order will not do is that an edge routed round the
+/// outside has no clear road to its lane, so each order is offered again with
+/// the ends of the routed edges moved to the end of their ranks, which is where
+/// one is. The sweeps come first: an order that draws every edge on its band
+/// beats one that had to move a box to get a run out.
 fn untangled(chart: &Flowchart, rank: &[usize], by_rank: &[Vec<usize>]) -> Vec<Vec<Vec<usize>>> {
     // The order in the document comes first, so it is what a chart is drawn in
     // whenever it can be. Then down, then back up, then down again: one pass
@@ -764,7 +802,32 @@ fn untangled(chart: &Flowchart, rank: &[usize], by_rank: &[Vec<usize>]) -> Vec<V
             orders.push(order.clone());
         }
     }
+    for candidate in orders.clone() {
+        let cleared = roads_cleared(chart, rank, &candidate);
+        if !orders.contains(&cleared) {
+            orders.push(cleared);
+        }
+    }
     orders
+}
+
+/// One order with the ends of every edge that skips a rank moved to the end of
+/// their ranks, which is the one place the road out to a lane is clear from.
+///
+/// Two such edges can want different boxes last in one rank, and then the second
+/// gets it; whether the order that comes out draws anything is decided by the
+/// same gate as every other candidate, so wanting the impossible costs nothing.
+fn roads_cleared(chart: &Flowchart, rank: &[usize], by_rank: &[Vec<usize>]) -> Vec<Vec<usize>> {
+    let mut order = by_rank.to_vec();
+    for i in routed(chart, rank, &[]) {
+        let edge = &chart.edges[i];
+        for node in [edge.from, edge.to] {
+            let rank = &mut order[rank[node]];
+            rank.retain(|n| *n != node);
+            rank.push(node);
+        }
+    }
+    order
 }
 
 /// Order one rank by where each of its nodes' neighbours in the next rank up
@@ -823,12 +886,7 @@ fn draw_top_down(
     // a long connector never has to cross a node. An edge taken off its band
     // takes the same road: it is the one place on the canvas that belongs to
     // one edge and to nothing else.
-    let long_edges: Vec<usize> = (0..chart.edges.len())
-        .filter(|i| {
-            let e = &chart.edges[*i];
-            rank[e.to] > rank[e.from] + 1 || diverted.contains(i)
-        })
-        .collect();
+    let long_edges = routed(chart, rank, diverted);
     let on_band = |i: usize| {
         let e = &chart.edges[i];
         rank[e.to] == rank[e.from] + 1 && !diverted.contains(&i)
@@ -986,11 +1044,7 @@ fn draw_left_right(
     // top-down layout gives one a lane to the right. Drawn straight it would
     // run at the boxes in between, and since a connector is only drawn where
     // the canvas is still blank, it disappeared behind them instead.
-    let long_edges: Vec<usize> = (0..chart.edges.len())
-        .filter(|i| {
-            rank[chart.edges[*i].to] > rank[chart.edges[*i].from] + 1 || diverted.contains(i)
-        })
-        .collect();
+    let long_edges = routed(chart, rank, diverted);
     let on_band = |i: usize| {
         let e = &chart.edges[i];
         rank[e.to] == rank[e.from] + 1 && !diverted.contains(&i)
@@ -2568,12 +2622,11 @@ mod tests {
     #[test]
     fn a_routed_edge_is_given_a_road_clear_of_every_box() {
         // A lane is out past the far end of every rank, and the run reaching
-        // it passes behind whatever boxes stand between. That is fair enough
-        // for an edge skipping a rank, which hides behind boxes it has nothing
-        // to do with; an edge taken off its own band came out of hiding beside
-        // the box next door and read as that box's edge — `│ C │◀──│ D │─┘`
-        // for a run that starts at `B`. So the rank is ordered to put both of
-        // its ends last, and where that cannot be had the chart is declined.
+        // it passes behind whatever boxes stand between: it came out of hiding
+        // beside the box next door and read as that box's edge —
+        // `│ C │◀──│ D │─┘` for a run that starts at `B`. So the rank is
+        // ordered to put both of its ends last, and where that cannot be had
+        // the chart is declined.
         let out = rows("flowchart TD\n A --> C\n A --> D\n B --> C\n");
         let row = row_of(&out, "│ C │");
         assert!(
@@ -2587,6 +2640,41 @@ mod tests {
         // are put.
         for dir in ["TD", "LR", "BT", "RL"] {
             let code = format!("flowchart {dir}\n Z --> C\n Z --> D\n A --> D\n B --> C\n");
+            assert!(render(&code, &CALC).is_none(), "drawn anyway:\n{code}");
+        }
+    }
+
+    #[test]
+    fn an_edge_that_skips_a_rank_is_given_a_clear_road_too() {
+        // The same road, and a claim about it that was not true: an edge that
+        // skips a rank was let out unasked, on the grounds that it hides behind
+        // boxes belonging to ranks it has nothing to do with. The boxes in its
+        // way belong to its own rank. `A --> C` beside `B --> Z` reached the
+        // lane along C's row, passed behind `Z` and came out the far side as
+        // `│ C │◀──│ Z │─┘`, joining two boxes nobody joined. Ordering `C` last
+        // of its rank is all it takes, and the arrowhead then sits against the
+        // box it points at however many boxes are beside it.
+        for k in 1..5 {
+            let siblings: String = (0..k).map(|i| format!(" B --> Z{i}\n")).collect();
+            let code = format!("flowchart TD\n A --> B --> C\n A --> C\n{siblings}");
+            let out = rows(&code);
+            let joined = out.join("\n");
+            assert!(
+                out.iter().any(|r| r.ends_with("│ C │◀┘")),
+                "{k} siblings, something stands beside C:\n{joined}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_chart_whose_routed_edges_cannot_all_have_a_clear_road_is_declined() {
+        // Two edges skip a rank, and their four ends are the two boxes of one
+        // rank and the two of another. Only one box of a rank can be its last,
+        // so whichever way round the ranks are put, one of the two runs would
+        // pass behind a box and come out as its edge.
+        for dir in ["TD", "LR", "BT", "RL"] {
+            let code =
+                format!("flowchart {dir}\n A --> X --> C\n B --> Y --> D\n A --> C\n B --> D\n");
             assert!(render(&code, &CALC).is_none(), "drawn anyway:\n{code}");
         }
     }
