@@ -309,6 +309,13 @@ images will fall back to alt text:
 kitty_graphics = true
 ```
 
+Its panes are drawn by ghostty's terminal, which implements no `ESC #` sequence
+but `DECALN`, so double-height headings are dropped there rather than mangled —
+and the pane reports `TERM=xterm-256color`, which the DECDHL allowlist would
+otherwise take at its word. `HERDR_PANE_ID` is what says a pane is one, so big
+headings inside herdr take the rasterized path, which needs the graphics opt-in
+above.
+
 ### Images
 
 A paragraph that holds nothing but pictures is a figure: one logo on its own,
@@ -1368,6 +1375,22 @@ record loses the picture — permanently, because nothing else remembers it.
       image up again under a fresh id and drew it over the top, and the first
       placement, which no longer appeared in any record, was never deleted — so
       it stayed where it was and scrolling slid the document out from under it.
+
+### v1.11 — Whose terminal is it
+
+A multiplexer's pane is a terminal in its own right, and the `TERM` it hands
+the process names the compatibility it offers rather than the emulator drawing
+it. An allowlist that reads that string is really asking the wrong terminal.
+
+- [x] Big headings did nothing inside herdr. Its panes report
+      `TERM=xterm-256color`, which the DECDHL allowlist reads as xterm, while
+      the terminal behind them is ghostty's, which implements `DECALN` and no
+      other `ESC #` sequence. A double-height row is written as two rows
+      carrying the same text, so the heading arrived not as one big line but as
+      two ordinary copies of itself. `HERDR_PANE_ID` is what says a pane is
+      one, the way `TMUX` does; ruling it out also puts headings back on the
+      rasterized path, which herdr draws once `experimental.kitty_graphics` is
+      on.
 
 ---
 
