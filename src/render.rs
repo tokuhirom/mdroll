@@ -558,17 +558,30 @@ fn push_run(out: &mut Vec<Span>, span: &Span, text: String, highlighted: bool, s
 /// an allowlist of terminals known to implement it, and everything else falls
 /// back to colour and weight.
 pub fn detect_double_height() -> bool {
+    double_height_from(|name| std::env::var(name).ok())
+}
+
+/// The decision itself, with the environment handed in so it can be tested.
+fn double_height_from(var: impl Fn(&str) -> Option<String>) -> bool {
     // tmux and screen rewrite line attributes and usually mangle them.
-    if std::env::var_os("TMUX").is_some() {
+    if var("TMUX").is_some() {
         return false;
     }
-    let term = std::env::var("TERM").unwrap_or_default();
+    // herdr draws its panes with ghostty's terminal, which implements DECALN
+    // and no other `ESC #` sequence, so a double-height heading is silently
+    // dropped to one row of ordinary text. It is the pane, not the terminal
+    // herdr itself runs in, that decides — and the pane says
+    // `TERM=xterm-256color`, which the allowlist below would otherwise believe.
+    if var("HERDR_PANE_ID").is_some() {
+        return false;
+    }
+    let term = var("TERM").unwrap_or_default();
     if term.starts_with("screen") || term.contains("kitty") {
         return false;
     }
-    let program = std::env::var("TERM_PROGRAM").unwrap_or_default();
-    std::env::var_os("WEZTERM_PANE").is_some()
-        || std::env::var_os("WEZTERM_EXECUTABLE").is_some()
+    let program = var("TERM_PROGRAM").unwrap_or_default();
+    var("WEZTERM_PANE").is_some()
+        || var("WEZTERM_EXECUTABLE").is_some()
         || program.eq_ignore_ascii_case("wezterm")
         || term.starts_with("xterm")
         || term.starts_with("foot")
@@ -692,6 +705,36 @@ pub fn rgb_to_ansi256(r: u8, g: u8, b: u8) -> u8 {
 mod tests {
     use super::*;
     use crate::ir::LinkId;
+
+    /// A fixed environment for `double_height_from`, so the decision can be
+    /// tested without the process's own variables taking part.
+    fn env(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> + use<> {
+        let vars: Vec<(String, String)> = vars
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect();
+        move |name: &str| {
+            vars.iter()
+                .find(|(k, _)| k == name)
+                .map(|(_, v)| v.to_string())
+        }
+    }
+
+    #[test]
+    fn a_herdr_pane_gets_no_double_height_however_it_names_itself() {
+        // herdr hands its panes `TERM=xterm-256color`, and the terminal behind
+        // them is ghostty's, which has no DECDHL: the heading came out as one
+        // row of ordinary text.
+        assert!(!double_height_from(env(&[
+            ("TERM", "xterm-256color"),
+            ("HERDR_PANE_ID", "wE:p1"),
+        ])));
+    }
+
+    #[test]
+    fn a_plain_xterm_still_gets_double_height() {
+        assert!(double_height_from(env(&[("TERM", "xterm-256color")])));
+    }
 
     #[test]
     fn a_heading_keeps_the_colour_of_each_span_inside_it() {
