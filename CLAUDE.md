@@ -36,6 +36,28 @@ has a test pinning GitHub's behaviour — if one fails, do not "fix" the test.
 - Say *why* in the body, the same as in a commit message. The PR is what a
   reader of the release notes follows.
 
+## Releases
+
+A release is a bump branch and nothing else: `Cargo.toml` and `Cargo.lock` to
+the new version, a `Release x.y.z` commit whose body says what changed and why
+that number rather than the next one along, and a PR labelled `documentation`
+listing the PRs it carries.
+
+Then **finish it in one go** — do not stop at the open PR and hand back the
+mechanical remainder:
+
+```console
+$ gh pr checks <n> --watch
+$ gh pr merge <n> --merge          # not a squash: every tag points at a merge commit
+$ git checkout main && git pull --ff-only
+$ git tag vx.y.z <merge commit> && git push origin vx.y.z
+```
+
+Pushing the tag is the only thing that triggers
+`.github/workflows/release.yml`, which builds the four target archives and
+generates the notes. Until the tag is pushed there is no release, however
+merged the PR is.
+
 ## Before pushing
 
 ```console
