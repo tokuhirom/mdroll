@@ -752,6 +752,15 @@ visibly broken output rather than a graceful no-op, detection is an allowlist
 rather than a denylist: WezTerm, xterm, and foot get double-height headings, and
 everything else gets colour and weight. `-z` forces them off anywhere.
 
+kitty is not the only one. **ghostty does not implement DECDHL either**, and
+unlike kitty its default `TERM` is `xterm-ghostty` — a name the allowlist reads
+as an xterm. It is therefore ruled out ahead of the list, by the variables
+ghostty sets for itself rather than the compatibility its `TERM` claims, the way
+graphics detection already recognises it. A multiplexer that embeds ghostty
+inherits both the missing sequence and those variables: cmux hands its panes
+`TERM=xterm-256color`, an xterm's name outright, and still needs no rule of its
+own.
+
 Where DECDHL is unavailable but graphics are not — kitty and ghostty, exactly —
 the heading is instead rendered to a bitmap at twice the cell height and placed
 with the Kitty graphics protocol over the two rows the layout already reserved.
@@ -1391,6 +1400,27 @@ it. An allowlist that reads that string is really asking the wrong terminal.
       one, the way `TMUX` does; ruling it out also puts headings back on the
       rasterized path, which herdr draws once `experimental.kitty_graphics` is
       on.
+
+### v1.12 — The emulator in plain sight
+
+Ruling out a terminal one step removed does not rule out the terminal. A rule
+that names the multiplexer answers only for the multiplexer, and leaves the
+emulator behind it — the one that will be met directly sooner or later — still
+believed.
+
+- [x] Big headings printed themselves twice in ghostty itself. The rule added
+      for herdr had ruled out ghostty's terminal one pane removed and left the
+      emulator standing in plain sight: ghostty's default `TERM` is
+      `xterm-ghostty`, and cmux, which embeds ghostty the way herdr does, hands
+      its panes `TERM=xterm-256color` — an xterm's name outright. The allowlist
+      believed both, while ghostty implements `DECALN` and no other `ESC #`
+      sequence, so the two halves of a double-height heading arrived as two
+      ordinary copies of the same text. The decision now asks the variables
+      ghostty sets — `TERM_PROGRAM`, `GHOSTTY_RESOURCES_DIR`, and its `TERM`
+      when unchanged — the way `graphics::detect` already does, which puts
+      headings on the rasterized path ghostty's graphics support already
+      qualifies it for. cmux leaves those variables standing, so it needs no
+      rule of its own.
 
 ---
 
