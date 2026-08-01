@@ -580,6 +580,20 @@ fn double_height_from(var: impl Fn(&str) -> Option<String>) -> bool {
         return false;
     }
     let program = var("TERM_PROGRAM").unwrap_or_default();
+    // ghostty has no DECDHL either, and every name it goes by satisfies the
+    // xterm test below: its default `TERM` is `xterm-ghostty`, and cmux — which
+    // embeds ghostty the way herdr does — hands its panes `TERM=xterm-256color`,
+    // an xterm's name outright. The herdr rule above is this same terminal one
+    // step removed; recognise the emulator itself the way `graphics::detect`
+    // already does, by the variables ghostty sets rather than the compatibility
+    // its `TERM` claims. cmux leaves those variables standing, so it needs no
+    // rule of its own.
+    if term.contains("ghostty")
+        || program.eq_ignore_ascii_case("ghostty")
+        || var("GHOSTTY_RESOURCES_DIR").is_some()
+    {
+        return false;
+    }
     var("WEZTERM_PANE").is_some()
         || var("WEZTERM_EXECUTABLE").is_some()
         || program.eq_ignore_ascii_case("wezterm")
@@ -728,6 +742,23 @@ mod tests {
         assert!(!double_height_from(env(&[
             ("TERM", "xterm-256color"),
             ("HERDR_PANE_ID", "wE:p1"),
+        ])));
+    }
+
+    #[test]
+    fn ghostty_gets_no_double_height_whatever_its_term_says() {
+        // ghostty's default TERM begins with xterm, and cmux hands its
+        // ghostty-drawn panes `TERM=xterm-256color`, indistinguishable from an
+        // xterm by that variable alone. Both were believed, and every heading
+        // printed itself twice at ordinary size.
+        assert!(!double_height_from(env(&[("TERM", "xterm-ghostty")])));
+        assert!(!double_height_from(env(&[
+            ("TERM", "xterm-256color"),
+            ("TERM_PROGRAM", "ghostty"),
+        ])));
+        assert!(!double_height_from(env(&[
+            ("TERM", "xterm-256color"),
+            ("GHOSTTY_RESOURCES_DIR", "/Applications/Ghostty.app/…"),
         ])));
     }
 
